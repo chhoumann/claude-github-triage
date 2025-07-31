@@ -1,0 +1,26 @@
+{
+  "name": "claude-github-triage",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "github-triage": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "dev": "bun --watch src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^1.0.63",
+    "@octokit/rest": "^22.0.0",
+    "@octokit/types": "^14.1.0",
+    "commander": "^14.0.0"
+  }
+}
