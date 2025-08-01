@@ -26,9 +26,11 @@ program
   .option("-i, --issue <number>", "Specific issue number to triage")
   .option("-s, --state <state>", "Issue state filter (open/closed/all)", "open")
   .option("-l, --labels <labels...>", "Filter by labels")
-  .option("--limit <number>", "Maximum number of issues to triage", "10")
+  .option("--limit <number>", "Maximum number of issues to triage")
   .option("--sort <field>", "Sort issues by: created, updated, comments", "created")
   .option("--direction <direction>", "Sort direction asc|desc", "desc")
+  .option("-c, --concurrency <number>", "Number of concurrent Claude Code instances", "3")
+  .option("-f, --force", "Force re-triage of already processed issues")
   .option(
     "--apply",
     "Apply recommendations to GitHub (add labels, close issues)",
@@ -49,6 +51,7 @@ program
           options.repo,
           parseInt(options.issue),
           projectPath,
+          options.force,
         );
 
         console.log(
@@ -63,9 +66,11 @@ program
           {
             state: options.state as "open" | "closed" | "all",
             labels: options.labels,
-            limit: parseInt(options.limit),
+            limit: options.limit ? parseInt(options.limit) : undefined,
             sort: options.sort,
             direction: options.direction,
+            concurrency: parseInt(options.concurrency),
+            force: options.force,
           },
         );
 

@@ -4,6 +4,20 @@ import { GitHubClient } from "./github";
 
 type Issue = RestEndpointMethodTypes["issues"]["get"]["response"]["data"];
 
+type TriageResult = {
+  issue: {
+    number: number;
+    title: string;
+    url: string;
+  };
+  recommendation?: {
+    shouldClose: boolean;
+    labels: string[];
+    confidence: "low" | "medium" | "high";
+    reasoning: string;
+  };
+};
+
 export class IssueTriage {
   private githubClient: GitHubClient;
 
@@ -16,7 +30,17 @@ export class IssueTriage {
     repo: string,
     issueNumber: number,
     projectPath: string,
+    force = false,
   ): Promise<void> {
+    // Check if we've already triaged this issue
+    const resultPath = `results/issue-${issueNumber}-triage.md`;
+    const resultFile = Bun.file(resultPath);
+    
+    if (!force && await resultFile.exists()) {
+      console.log(`  ⏭️  Skipping issue #${issueNumber} - already triaged`);
+      return;
+    }
+    
     console.log(`  Fetching issue details...`);
     const issue = await this.githubClient.getIssue(owner, repo, issueNumber);
 
@@ -117,63 +141,125 @@ SUGGESTED_RESPONSE:
       limit?: number;
       sort?: "created" | "updated" | "comments";
       direction?: "asc" | "desc";
+      concurrency?: number;
+      force?: boolean;
     },
   ) {
-    this.githubClient.listIssues;
-    const issues = await this.githubClient.listIssues(owner, repo, {
+    const concurrencyLimit = options?.concurrency || 3; // Default to 3 concurrent triages
+    const results: Promise<TriageResult>[] = [];
+    const activePromises = new Map<number, Promise<TriageResult>>();
+    let processedCount = 0;
+    let skippedCount = 0;
+    let totalCount = 0;
+
+    console.log(`Starting issue triage with concurrency limit: ${concurrencyLimit}`);
+    if (options?.force) {
+      console.log(`Force mode enabled - will re-triage existing issues`);
+    }
+
+    // Helper function to wait for a slot to become available
+    const waitForSlot = async () => {
+      while (activePromises.size >= concurrencyLimit) {
+        await Promise.race(activePromises.values());
+      }
+    };
+
+    // Process issues from the generator
+    for await (const issue of this.githubClient.listIssuesPaginated(owner, repo, {
       state: options?.state,
       labels: options?.labels,
-      per_page: options?.limit || 10,
       sort: options?.sort,
       direction: options?.direction,
-    });
+    })) {
+      // Check if we've reached the limit
+      if (options?.limit && processedCount >= options.limit) {
+        break;
+      }
 
-    console.log(`Found ${issues.length} issues to triage`);
+      totalCount++;
+      
+      // Skip issues without numbers
+      if (!issue.number) continue;
 
-    // Process all issues concurrently
-    const promises = issues
-      .filter((issue) => issue.number)
-      .map(async (issue) => {
-        console.log(
-          `Starting triage for issue #${issue.number}: ${issue.title}`,
-        );
-
-        try {
-          const recommendation = await this.triageIssue(
-            owner,
-            repo,
-            issue.number,
-            projectPath,
+      // Check if already triaged (unless force mode)
+      if (!options?.force) {
+        const resultPath = `results/issue-${issue.number}-triage.md`;
+        const resultFile = Bun.file(resultPath);
+        if (await resultFile.exists()) {
+          skippedCount++;
+          console.log(
+            `[${processedCount + skippedCount}/${options?.limit || "all"}] ⏭️  Skipping issue #${issue.number}: ${issue.title} (already triaged)`,
           );
-
-          return {
-            issue: {
-              number: issue.number,
-              title: issue.title,
-              url: issue.html_url,
-            },
-            recommendation,
-          };
-        } catch (error) {
-          console.error(`Failed to triage issue #${issue.number}:`, error);
-          return {
-            issue: {
-              number: issue.number,
-              title: issue.title,
-              url: issue.html_url,
-            },
-            recommendation: {
-              shouldClose: false,
-              labels: [],
-              confidence: "low" as const,
-              reasoning: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          };
+          continue;
         }
+      }
+
+      // Wait for a slot to become available
+      await waitForSlot();
+
+      console.log(
+        `[${processedCount + 1}/${options?.limit || "all"}] Starting triage for issue #${issue.number}: ${issue.title}`,
+      );
+
+      // Create the triage promise
+      const triagePromise = this.triageIssue(
+        owner,
+        repo,
+        issue.number,
+        projectPath,
+        options?.force || false,
+      ).then(() => {
+        activePromises.delete(issue.number);
+        processedCount++;
+        console.log(`[${processedCount}/${options?.limit || totalCount}] Completed triage for issue #${issue.number}`);
+        return {
+          issue: {
+            number: issue.number,
+            title: issue.title,
+            url: issue.html_url,
+          },
+          recommendation: undefined, // triageIssue saves results to file, doesn't return them
+        };
+      }).catch((error) => {
+        activePromises.delete(issue.number);
+        processedCount++;
+        console.error(`[${processedCount}/${options?.limit || totalCount}] Failed to triage issue #${issue.number}:`, error);
+        return {
+          issue: {
+            number: issue.number,
+            title: issue.title,
+            url: issue.html_url,
+          },
+          recommendation: {
+            shouldClose: false,
+            labels: [],
+            confidence: "low" as const,
+            reasoning: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        };
       });
 
-    // Wait for all triages to complete
-    const results = await Promise.all(promises);
-    return results;
+      // Add to active promises
+      activePromises.set(issue.number, triagePromise);
+      results.push(triagePromise);
+
+      // If we've reached the limit, break
+      if (options?.limit && processedCount + activePromises.size >= options.limit) {
+        break;
+      }
+    }
+
+    // Wait for all remaining triages to complete
+    console.log(`Waiting for ${activePromises.size} remaining triages to complete...`);
+    const finalResults = await Promise.all(results);
+    
+    console.log(`\nTriage complete:`);
+    console.log(`  ✅ Processed: ${processedCount} issues`);
+    if (skippedCount > 0) {
+      console.log(`  ⏭️  Skipped: ${skippedCount} issues (already triaged)`);
+    }
+    console.log(`  📊 Total found: ${totalCount} issues`);
+    
+    return finalResults;
   }
 }

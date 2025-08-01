@@ -86,4 +86,35 @@ export class GitHubClient {
       return null;
     }
   }
+
+  async *listIssuesPaginated(owner: string, repo: string, options?: {
+    state?: 'open' | 'closed' | 'all';
+    labels?: string[];
+    since?: string;
+    sort?: 'created' | 'updated' | 'comments';
+    direction?: 'asc' | 'desc';
+  }) {
+    let page = 1;
+    const perPage = 100; // GitHub max per page
+    
+    while (true) {
+      const issues = await this.listIssues(owner, repo, {
+        ...options,
+        page,
+        per_page: perPage,
+      });
+      
+      // Yield each issue individually
+      for (const issue of issues) {
+        yield issue;
+      }
+      
+      // If we got fewer issues than per_page, we've reached the end
+      if (issues.length < perPage) {
+        break;
+      }
+      
+      page++;
+    }
+  }
 }
