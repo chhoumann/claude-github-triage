@@ -1,6 +1,7 @@
 import { query, type SDKMessage } from "@anthropic-ai/claude-code";
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 import { GitHubClient } from "./github";
+import { ReviewManager } from "./review-manager";
 
 type Issue = RestEndpointMethodTypes["issues"]["get"]["response"]["data"];
 
@@ -20,9 +21,11 @@ type TriageResult = {
 
 export class IssueTriage {
   private githubClient: GitHubClient;
+  private reviewManager: ReviewManager;
 
   constructor(githubToken: string) {
     this.githubClient = new GitHubClient(githubToken);
+    this.reviewManager = new ReviewManager();
   }
 
   async triageIssue(
@@ -93,7 +96,9 @@ export class IssueTriage {
       lastMessage.type === "result" &&
       lastMessage.subtype === "success"
     ) {
-      Bun.write(`results/issue-${issueNumber}-triage.md`, lastMessage.result);
+      await Bun.write(`results/issue-${issueNumber}-triage.md`, lastMessage.result);
+      // Update review metadata
+      await this.reviewManager.updateTriageMetadata(issueNumber);
     } else {
       console.error(`No response from Claude for issue #${issueNumber}`);
     }
