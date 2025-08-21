@@ -116,12 +116,14 @@ program
   .description("View triaged issues and their review status")
   .option("-f, --filter <type>", "Filter by status: all, read, unread", "all")
   .option("-s, --sort <field>", "Sort by: number, date", "number")
+  .option("--close <filter>", "Filter by SHOULD_CLOSE: yes|no|unknown|not-no")
   .action(async (options) => {
     try {
       const reviewManager = new ReviewManager();
       const issues = await reviewManager.getInbox(
         options.filter as "all" | "read" | "unread",
-        options.sort as "number" | "date"
+        options.sort as "number" | "date",
+        options.close as "yes" | "no" | "unknown" | "not-no" | undefined,
       );
       
       const stats = await reviewManager.getStats();

@@ -104,22 +104,40 @@ export class ReviewManager {
     await this.saveMetadata();
   }
 
-  async getInbox(filter?: "all" | "read" | "unread", sort?: "number" | "date"): Promise<IssueMetadata[]> {
+  async getInbox(
+    filter?: "all" | "read" | "unread",
+    sort?: "number" | "date",
+    closeFilter?: "yes" | "no" | "unknown" | "not-no",
+  ): Promise<IssueMetadata[]> {
     await this.scanForNewIssues();
     
     let issues = Object.values(this.metadata.issues);
     
-    // Apply filter
+    // Apply read/unread filter
     if (filter === "read") {
-      issues = issues.filter(i => i.reviewStatus === "read");
+      issues = issues.filter((i) => i.reviewStatus === "read");
     } else if (filter === "unread") {
-      issues = issues.filter(i => i.reviewStatus === "unread");
+      issues = issues.filter((i) => i.reviewStatus === "unread");
+    }
+
+    // Apply SHOULD_CLOSE filter
+    if (closeFilter) {
+      if (closeFilter === "yes") {
+        issues = issues.filter((i) => i.shouldClose === true);
+      } else if (closeFilter === "no") {
+        issues = issues.filter((i) => i.shouldClose === false);
+      } else if (closeFilter === "unknown") {
+        issues = issues.filter((i) => typeof i.shouldClose === "undefined");
+      } else if (closeFilter === "not-no") {
+        issues = issues.filter((i) => i.shouldClose !== false);
+      }
     }
     
     // Apply sort
     if (sort === "date") {
-      issues.sort((a, b) => 
-        new Date(b.triageDate).getTime() - new Date(a.triageDate).getTime()
+      issues.sort(
+        (a, b) =>
+          new Date(b.triageDate).getTime() - new Date(a.triageDate).getTime(),
       );
     } else {
       issues.sort((a, b) => b.issueNumber - a.issueNumber);
