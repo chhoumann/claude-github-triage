@@ -18,7 +18,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.63",
+    "@anthropic-ai/claude-agent-sdk": "^0.1.8",
     "@octokit/rest": "^22.0.0",
     "@octokit/types": "^14.1.0",
     "commander": "^14.0.0"

@@ -4,7 +4,7 @@
     "": {
       "name": "claude-github-triage",
       "dependencies": {
-        "@anthropic-ai/claude-code": "^1.0.63",
+        "@anthropic-ai/claude-agent-sdk": "^0.1.8",
         "@octokit/rest": "^22.0.0",
         "@octokit/types": "^14.1.0",
         "commander": "^14.0.0",
@@ -18,7 +18,7 @@
     },
   },
   "packages": {
-    "@anthropic-ai/claude-code": ["@anthropic-ai/claude-code@1.0.63", "", { "optionalDependencies": { "@img/sharp-darwin-arm64": "^0.33.5", "@img/sharp-darwin-x64": "^0.33.5", "@img/sharp-linux-arm": "^0.33.5", "@img/sharp-linux-arm64": "^0.33.5", "@img/sharp-linux-x64": "^0.33.5", "@img/sharp-win32-x64": "^0.33.5" }, "bin": { "claude": "cli.js" } }, "sha512-4aprhrYgBZJ47ADg9mIY+HX/ncqapxW97R4m5CZAE12Rv+lm427sgKyOcdxC/KlSZuwHKiL+nHbI+inos7fqSA=="],
+    "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.1.8", "", { "optionalDependencies": { "@img/sharp-darwin-arm64": "^0.33.5", "@img/sharp-darwin-x64": "^0.33.5", "@img/sharp-linux-arm": "^0.33.5", "@img/sharp-linux-arm64": "^0.33.5", "@img/sharp-linux-x64": "^0.33.5", "@img/sharp-win32-x64": "^0.33.5" } }, "sha512-QaylzHEweHI4FOKAfFd8FNzbyFd+WSA8Hb5V8+O0gOi0X1iV5xa+f6lFjBI9AlGP3frfb1ONn6LYmn0d+szV3g=="],
 
     "@img/sharp-darwin-arm64": ["@img/sharp-darwin-arm64@0.33.5", "", { "optionalDependencies": { "@img/sharp-libvips-darwin-arm64": "1.0.4" }, "os": "darwin", "cpu": "arm64" }, "sha512-UT4p+iz/2H4twwAoLCqfA9UH5pI6DggwKEGuaPy7nCVQ8ZsiY5PIcrRvD1DzuY3qYL07NtIQcWnBSY/heikIFQ=="],
 

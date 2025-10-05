@@ -1,4 +1,4 @@
-import { query, type SDKMessage } from "@anthropic-ai/claude-code";
+import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 import { GitHubClient } from "./github";
 import { ReviewManager } from "./review-manager";

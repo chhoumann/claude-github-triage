@@ -92,6 +92,15 @@ bun cli.ts inbox
 bun cli.ts inbox --filter unread
 bun cli.ts inbox --filter read
 
+# Filter by close recommendation
+bun cli.ts inbox --close yes     # Issues that should be closed
+bun cli.ts inbox --close no      # Issues that should NOT be closed
+bun cli.ts inbox --close unknown # Issues with unknown status
+bun cli.ts inbox --close not-no  # Issues that are yes or unknown (not explicitly no)
+
+# Combine filters
+bun cli.ts inbox --filter unread --close yes  # Unread issues that should be closed
+
 # Sort options
 bun cli.ts inbox --sort date
 ```
@@ -99,6 +108,7 @@ bun cli.ts inbox --sort date
 **Options:**
 - `-f, --filter <type>`: Filter by status (all/read/unread, default: all)
 - `-s, --sort <field>`: Sort by field (number/date, default: number)
+- `--close <filter>`: Filter by SHOULD_CLOSE recommendation (yes/no/unknown/not-no)
 
 Shows a table with:
 - Issue number
