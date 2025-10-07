@@ -1,6 +1,6 @@
-import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 import { Listr } from "listr2";
+import type { AgentAdapter, AgentMessage } from "./adapters";
 import { GitHubClient } from "./github";
 import { ReviewManager } from "./review-manager";
 
@@ -23,10 +23,14 @@ type TriageResult = {
 export class IssueTriage {
   private githubClient: GitHubClient;
   private reviewManager: ReviewManager;
+  private agentAdapter: AgentAdapter;
+  private adapterName: string;
 
-  constructor(githubToken: string) {
+  constructor(githubToken: string, agentAdapter: AgentAdapter, adapterName: string) {
     this.githubClient = new GitHubClient(githubToken);
     this.reviewManager = new ReviewManager();
+    this.agentAdapter = agentAdapter;
+    this.adapterName = adapterName;
   }
 
   async triageIssue(
@@ -46,15 +50,12 @@ export class IssueTriage {
     
     const issue = await this.githubClient.getIssue(owner, repo, issueNumber);
     const prompt = this.buildTriagePrompt(issue, owner, repo);
-    const messages: SDKMessage[] = [];
+    const messages: AgentMessage[] = [];
 
-    for await (const message of query({
-      prompt,
-      options: {
-        maxTurns: 100000,
-        cwd: projectPath,
-        timeout: 3600000, // 1 hour in milliseconds
-      },
+    for await (const message of this.agentAdapter.query(prompt, {
+      maxTurns: 100000,
+      cwd: projectPath,
+      timeout: 3600000, // 1 hour in milliseconds
     })) {
       messages.push(message);
     }
@@ -76,7 +77,7 @@ export class IssueTriage {
     ) {
       await Bun.write(`results/issue-${issueNumber}-triage.md`, lastMessage.result);
       // Update review metadata
-      await this.reviewManager.updateTriageMetadata(issueNumber);
+      await this.reviewManager.updateTriageMetadata(issueNumber, this.adapterName);
     } else {
       throw new Error(`No response from Claude for issue #${issueNumber}`);
     }

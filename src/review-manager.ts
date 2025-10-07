@@ -323,15 +323,22 @@ export class ReviewManager {
     }
   }
 
-  async updateTriageMetadata(issueNumber: number): Promise<void> {
+  async updateTriageMetadata(issueNumber: number, model?: string): Promise<void> {
     // Called when an issue is triaged
-    if (!this.metadata.issues[issueNumber.toString()]) {
-      this.metadata.issues[issueNumber.toString()] = {
+    const issueKey = issueNumber.toString();
+    if (!this.metadata.issues[issueKey]) {
+      this.metadata.issues[issueKey] = {
         issueNumber,
         triageDate: new Date().toISOString(),
         reviewStatus: "unread",
       };
-      await this.saveMetadata();
     }
+    
+    // Update model if provided
+    if (model) {
+      this.metadata.issues[issueKey].model = model;
+    }
+    
+    await this.saveMetadata();
   }
 }

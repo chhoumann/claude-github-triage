@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import { Command } from "commander";
+import { ClaudeAdapter, CodexAdapter } from "./adapters";
 import { GitHubClient } from "./github";
 import { IssueTriage } from "./issue-triager";
 import { ReviewManager } from "./review-manager";
@@ -37,29 +38,52 @@ program
   .option("-c, --concurrency <number>", "Number of concurrent Claude Code instances", "3")
   .option("-f, --force", "Force re-triage of already processed issues")
   .option(
+    "--adapter <type>",
+    "AI agent adapter to use: claude or codex",
+    "claude",
+  )
+  .option(
     "--apply",
     "Apply recommendations to GitHub (add labels, close issues)",
   )
   .action(async (options) => {
     try {
-      const triager = new IssueTriage(options.token);
+      const adapterType = options.adapter || "claude";
+      const adapter = adapterType === "codex" ? new CodexAdapter() : new ClaudeAdapter();
+      const triager = new IssueTriage(options.token, adapter, adapterType);
       const projectPath = path.resolve(options.path);
 
       if (options.issue) {
-        console.log(`🔍 Triaging issue #${options.issue} for ${options.owner}/${options.repo}`);
-        console.log(`📁 Using codebase at: ${projectPath}\n`);
+        const issueNum = parseInt(options.issue);
+        const resultPath = `results/issue-${issueNum}-triage.md`;
+        const resultFile = Bun.file(resultPath);
+        const exists = await resultFile.exists();
+        
+        console.log(`🔍 Triaging issue #${issueNum} for ${options.owner}/${options.repo}`);
+        console.log(`📁 Using codebase at: ${projectPath}`);
+        console.log(`🤖 Using adapter: ${adapterType}`);
+        
+        if (exists && options.force) {
+          console.log(`🔄 Force mode: re-triaging existing issue\n`);
+        } else if (exists) {
+          console.log(`✅ Issue already triaged. Use --force to re-triage.\n`);
+          return;
+        } else {
+          console.log();
+        }
+        
         // Triage single issue
-        console.log(`Analyzing issue #${options.issue}...`);
+        console.log(`Analyzing issue #${issueNum}...`);
         await triager.triageIssue(
           options.owner,
           options.repo,
-          parseInt(options.issue),
+          issueNum,
           projectPath,
           options.force,
         );
 
         console.log(
-          `\n📋 Analysis complete. Results saved to: results/issue-${options.issue}-triage.md`,
+          `\n📋 Analysis complete. Results saved to: ${resultPath}`,
         );
       } else {
         // Triage multiple issues

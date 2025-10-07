@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { ClaudeAdapter } from './src/adapters';
 import { IssueTriage } from './src/issue-triager';
 
 const token = process.env.GITHUB_TOKEN;
@@ -11,7 +12,8 @@ if (!token) {
 async function testMultipleIssues() {
   console.log('Testing concurrent issue triage...\n');
   
-  const triager = new IssueTriage(token!);
+  const adapter = new ClaudeAdapter();
+  const triager = new IssueTriage(token!, adapter, 'claude');
   
   try {
     const results = await triager.triageMultipleIssues(

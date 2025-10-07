@@ -42,6 +42,12 @@ export const TableView: React.FC<TableViewProps> = ({
 
   const formatModel = (model: string | undefined): string => {
     if (!model) return "".padEnd(15);
+    
+    // Handle adapter names (claude, codex)
+    if (model === "claude" || model === "codex") {
+      return model.padEnd(15);
+    }
+    
     // Extract just the model name (e.g., "sonnet-4-5" from "claude-sonnet-4-5-20250929")
     const match = model.match(/claude-([\w-]+)-\d{8}/);
     if (match) {
