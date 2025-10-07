@@ -8,6 +8,11 @@ export interface IssueMetadata {
   tags?: string[];
   notes?: string;
   shouldClose?: boolean;
+  isDone?: boolean;
+  title?: string;
+  labels?: string[];
+  confidence?: string;
+  model?: string;
 }
 
 export interface MetadataStore {
@@ -19,10 +24,11 @@ export class ReviewManager {
   private metadata: MetadataStore = { issues: {} };
 
   constructor() {
-    this.loadMetadata();
+    // Note: loadMetadata is async but constructor can't be async
+    // Must call loadMetadata() or scanForNewIssues() before using
   }
 
-  private async loadMetadata(): Promise<void> {
+  public async loadMetadata(): Promise<void> {
     try {
       const file = Bun.file(this.metadataPath);
       if (await file.exists()) {
@@ -39,7 +45,100 @@ export class ReviewManager {
     await Bun.write(this.metadataPath, JSON.stringify(this.metadata, null, 2));
   }
 
-  async scanForNewIssues(): Promise<void> {
+  private getGitHubRepo(): { owner: string; repo: string } | null {
+    // First try config
+    const { ConfigManager } = require("./config-manager");
+    const configManager = new ConfigManager();
+    const configRepo = configManager.getGitHubRepo();
+    
+    if (configRepo) {
+      const [owner, repo] = configRepo.split("/");
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+    
+    // Fallback to git remote
+    try {
+      const gitRemote = Bun.spawnSync(["git", "config", "--get", "remote.origin.url"], {
+        cwd: process.cwd(),
+      });
+      
+      if (gitRemote.exitCode === 0) {
+        const remoteUrl = gitRemote.stdout.toString().trim();
+        const match = remoteUrl.match(/github\.com[:/](.+?)\/(.+?)(\.git)?$/);
+        
+        if (match) {
+          return { owner: match[1]!, repo: match[2]! };
+        }
+      }
+    } catch (err) {
+      // Ignore
+    }
+    return null;
+  }
+
+  public async fetchMissingTitlesInBackground(onUpdate?: () => void): Promise<void> {
+    const repoInfo = this.getGitHubRepo();
+    if (!repoInfo) return;
+
+    const { owner, repo } = repoInfo;
+    
+    // Check if we have any issues without titles
+    const hasIssuesWithoutTitles = Object.values(this.metadata.issues).some(
+      issue => !issue.title
+    );
+    
+    if (!hasIssuesWithoutTitles) return;
+
+    try {
+      // Fetch ALL issues in one call - much faster!
+      // Use --limit 1000 to get all issues (default is 30)
+      const result = Bun.spawnSync([
+        "gh", "issue", "list",
+        "-R", `${owner}/${repo}`,
+        "--json", "number,title",
+        "--limit", "1000",
+        "--state", "all"  // Get both open and closed
+      ]);
+      
+      if (result.exitCode === 0) {
+        const allIssues = JSON.parse(result.stdout.toString()) as Array<{
+          number: number;
+          title: string;
+        }>;
+        
+        // Create a map for quick lookup
+        const titleMap = new Map(
+          allIssues.map(issue => [issue.number.toString(), issue.title])
+        );
+        
+        // Update all our issues that are missing titles
+        let updated = false;
+        for (const [issueId, issue] of Object.entries(this.metadata.issues)) {
+          if (!issue.title && titleMap.has(issueId)) {
+            issue.title = titleMap.get(issueId);
+            updated = true;
+          }
+        }
+        
+        // Save and trigger update if anything changed
+        if (updated) {
+          await this.saveMetadata();
+          if (onUpdate) {
+            onUpdate();
+          }
+        }
+      }
+    } catch (err) {
+      // Silently fail - not critical
+    }
+  }
+
+  public async scanForNewIssues(): Promise<void> {
+    // Reload metadata from disk first
+    await this.loadMetadata();
+    
     const glob = new Glob("results/issue-*-triage.md");
     
     for await (const file of glob.scan()) {
@@ -57,11 +156,47 @@ export class ReviewManager {
           };
         }
         
-        // Parse SHOULD_CLOSE from the file
+        // Parse triage file for metadata
         const content = await Bun.file(file).text();
+        const issue = this.metadata.issues[issueNumber];
+        
+        // Parse title from file (don't fetch from GitHub here - too slow)
+        const titleMatch = content.match(/^#\s+Issue\s+#\d+:\s*(.+)$/m);
+        if (titleMatch) {
+          issue.title = titleMatch[1].trim();
+        }
+        
+        // Parse SHOULD_CLOSE
         const shouldCloseMatch = content.match(/SHOULD_CLOSE:\s*(Yes|No)/i);
         if (shouldCloseMatch) {
-          this.metadata.issues[issueNumber].shouldClose = shouldCloseMatch[1].toLowerCase() === "yes";
+          issue.shouldClose = shouldCloseMatch[1].toLowerCase() === "yes";
+        }
+        
+        // Parse LABELS
+        const labelsMatch = content.match(/LABELS:\s*(.+)$/m);
+        if (labelsMatch) {
+          const labelsStr = labelsMatch[1].trim();
+          issue.labels = labelsStr ? labelsStr.split(',').map(l => l.trim()).filter(l => l) : [];
+        }
+        
+        // Parse CONFIDENCE
+        const confidenceMatch = content.match(/CONFIDENCE:\s*(High|Medium|Low)/i);
+        if (confidenceMatch) {
+          issue.confidence = confidenceMatch[1];
+        }
+        
+        // Parse model from debug.json
+        const debugFile = Bun.file(`results/issue-${issueNumber}-triage-debug.json`);
+        if (await debugFile.exists()) {
+          try {
+            const debugContent = await debugFile.text();
+            const debugData = JSON.parse(debugContent);
+            if (Array.isArray(debugData) && debugData.length > 0 && debugData[0].model) {
+              issue.model = debugData[0].model;
+            }
+          } catch (err) {
+            // Ignore parse errors
+          }
         }
       }
     }
@@ -102,6 +237,16 @@ export class ReviewManager {
     }
     
     await this.saveMetadata();
+  }
+
+  async markAsDone(issueNumber: number, done: boolean = true): Promise<void> {
+    await this.scanForNewIssues();
+    
+    const issue = this.metadata.issues[issueNumber.toString()];
+    if (issue) {
+      issue.isDone = done;
+      await this.saveMetadata();
+    }
   }
 
   async getInbox(

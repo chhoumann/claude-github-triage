@@ -5,6 +5,10 @@ import { Command } from "commander";
 import { GitHubClient } from "./github";
 import { IssueTriage } from "./issue-triager";
 import { ReviewManager } from "./review-manager";
+import { EditorManager } from "./editor-manager";
+import React from "react";
+import { render } from "ink";
+import { InboxApp } from "./tui/InboxApp";
 
 const program = new Command();
 
@@ -41,10 +45,9 @@ program
       const triager = new IssueTriage(options.token);
       const projectPath = path.resolve(options.path);
 
-      console.log(`🔍 Triaging issues for ${options.owner}/${options.repo}`);
-      console.log(`📁 Using codebase at: ${projectPath}\n`);
-
       if (options.issue) {
+        console.log(`🔍 Triaging issue #${options.issue} for ${options.owner}/${options.repo}`);
+        console.log(`📁 Using codebase at: ${projectPath}\n`);
         // Triage single issue
         console.log(`Analyzing issue #${options.issue}...`);
         await triager.triageIssue(
@@ -73,10 +76,6 @@ program
             concurrency: parseInt(options.concurrency),
             force: options.force,
           },
-        );
-
-        console.log(
-          `\n📊 Triage for multiple issues complete. Results saved to: results/`,
         );
       }
     } catch (error) {
@@ -117,9 +116,24 @@ program
   .option("-f, --filter <type>", "Filter by status: all, read, unread", "all")
   .option("-s, --sort <field>", "Sort by: number, date", "number")
   .option("--close <filter>", "Filter by SHOULD_CLOSE: yes|no|unknown|not-no")
+  .option("-i, --interactive", "Interactive TUI mode")
   .action(async (options) => {
     try {
+      // Interactive TUI mode
+      if (options.interactive) {
+        render(
+          React.createElement(InboxApp, {
+            filter: options.filter as "all" | "read" | "unread",
+            sort: options.sort as "number" | "date",
+            closeFilter: options.close as "yes" | "no" | "unknown" | "not-no" | undefined,
+          })
+        );
+        return;
+      }
+
+      // Legacy table mode
       const reviewManager = new ReviewManager();
+      await reviewManager.scanForNewIssues();
       const issues = await reviewManager.getInbox(
         options.filter as "all" | "read" | "unread",
         options.sort as "number" | "date",
@@ -156,7 +170,7 @@ program
       console.log("└─────────┴────────────┴───────────────────────┴────────────────────────┴──────────┘");
       
       if (stats.unread > 0) {
-        console.log(`\n💡 Tip: Use 'bun cli.ts review' to start reviewing unread issues`);
+        console.log(`\n💡 Tip: Use 'bun cli.ts inbox --interactive' for interactive mode`);
       }
     } catch (error) {
       console.error("❌ Error:", error);
@@ -172,6 +186,7 @@ program
   .action(async (options) => {
     try {
       const reviewManager = new ReviewManager();
+      await reviewManager.scanForNewIssues();
       
       if (options.issue) {
         // Review specific issue
@@ -227,17 +242,21 @@ program
 
 program
   .command("mark")
-  .description("Mark issues as read or unread")
+  .description("Mark issues as read/unread/done")
   .argument("[issue]", "Issue number to mark (or use --all)")
   .option("-r, --read", "Mark as read")
   .option("-u, --unread", "Mark as unread")
+  .option("-d, --done", "Mark as done")
+  .option("-D, --not-done", "Mark as not done")
   .option("-a, --all", "Mark all issues")
   .action(async (issue, options) => {
     try {
       const reviewManager = new ReviewManager();
+      await reviewManager.loadMetadata();
       
-      if (!options.read && !options.unread) {
-        console.error("❌ Please specify --read or --unread");
+      const hasAction = options.read || options.unread || options.done || options.notDone;
+      if (!hasAction) {
+        console.error("❌ Please specify --read, --unread, --done, or --not-done");
         process.exit(1);
       }
       
@@ -246,16 +265,22 @@ program
           await reviewManager.markAllAsRead();
           console.log("✅ All issues marked as read");
         } else {
-          console.error("❌ Marking all as unread is not supported");
+          console.error("❌ Only --read is supported with --all");
         }
       } else if (issue) {
         const issueNumber = parseInt(issue);
         if (options.read) {
           await reviewManager.markAsRead(issueNumber);
           console.log(`✅ Issue #${issueNumber} marked as read`);
-        } else {
+        } else if (options.unread) {
           await reviewManager.markAsUnread(issueNumber);
           console.log(`✅ Issue #${issueNumber} marked as unread`);
+        } else if (options.done) {
+          await reviewManager.markAsDone(issueNumber, true);
+          console.log(`✅ Issue #${issueNumber} marked as done`);
+        } else if (options.notDone) {
+          await reviewManager.markAsDone(issueNumber, false);
+          console.log(`✅ Issue #${issueNumber} marked as not done`);
         }
       } else {
         console.error("❌ Please specify an issue number or use --all");
@@ -281,6 +306,7 @@ program
     try {
       const githubClient = new GitHubClient(options.token);
       const reviewManager = new ReviewManager();
+      await reviewManager.loadMetadata();
       
       console.log(`🔄 Syncing with ${options.owner}/${options.repo}...`);
       
@@ -331,6 +357,112 @@ program
       // Show updated stats
       const stats = await reviewManager.getStats();
       console.log(`\n📊 Updated stats: ${stats.unread} unread, ${stats.read} read (${stats.total} total)`);
+    } catch (error) {
+      console.error("❌ Error:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("open")
+  .description("Open a triaged issue in your preferred editor")
+  .argument("<issue>", "Issue number to open")
+  .option("-e, --editor <editor>", "Editor to use (zed, vim, nvim, cursor, code)")
+  .action(async (issue, options) => {
+    try {
+      const issueNumber = parseInt(issue);
+      const filePath = `results/issue-${issueNumber}-triage.md`;
+      const file = Bun.file(filePath);
+      
+      if (!(await file.exists())) {
+        console.error(`❌ Triage file not found: ${filePath}`);
+        console.log(`\n💡 Tip: Run 'bun cli.ts triage' to generate triage results first`);
+        process.exit(1);
+      }
+
+      const editorManager = new EditorManager();
+      const availableEditors = editorManager.getAvailableEditors();
+      
+      if (availableEditors.length === 0) {
+        console.error("❌ No editors available");
+        console.log("\n💡 Supported editors: Zed, Vim, Neovim, Cursor, VS Code");
+        process.exit(1);
+      }
+
+      let editorKey = options.editor;
+      
+      // If no editor specified, use default or show options
+      if (!editorKey) {
+        editorKey = editorManager.getDefaultEditor();
+        if (!editorKey) {
+          console.log("📝 Available editors:");
+          availableEditors.forEach((editor, idx) => {
+            console.log(`  ${idx + 1}. ${editor.name} (${editor.key})`);
+          });
+          console.log("\n💡 Use --editor <editor> to specify, or set a default with 'bun cli.ts config set-editor <editor>'");
+          process.exit(0);
+        }
+      }
+
+      const absolutePath = `${process.cwd()}/${filePath}`;
+      await editorManager.openFile(absolutePath, editorKey);
+      
+      const editorName = editorManager.getEditorName(editorKey);
+      console.log(`✅ Opened issue #${issueNumber} in ${editorName}`);
+    } catch (error) {
+      console.error("❌ Error:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("config")
+  .description("Manage configuration")
+  .argument("<action>", "Action: show, set-editor")
+  .argument("[value]", "Value for the action")
+  .action(async (action, value) => {
+    try {
+      const editorManager = new EditorManager();
+      
+      if (action === "show") {
+        const availableEditors = editorManager.getAvailableEditors();
+        const defaultEditor = editorManager.getDefaultEditor();
+        const { ConfigManager } = await import("./config-manager");
+        const configManager = new ConfigManager();
+        const githubRepo = configManager.getGitHubRepo();
+        
+        console.log("📝 Configuration:");
+        console.log(`\nGitHub Repo: ${githubRepo || "Not set (required for title fetching and web links)"}`);
+        console.log(`\nDefault editor: ${defaultEditor ? editorManager.getEditorName(defaultEditor) : "Not set"}`);
+        console.log("\nAvailable editors:");
+        availableEditors.forEach((editor) => {
+          const isDefault = editor.key === defaultEditor;
+          console.log(`  ${isDefault ? "✓" : " "} ${editor.name} (${editor.key}) - ${editor.path}`);
+        });
+      } else if (action === "set-repo") {
+        if (!value) {
+          console.error("❌ Please specify a repo in format: owner/repo");
+          console.error("Example: bun run src/cli.ts config set-repo chhoumann/quickadd");
+          process.exit(1);
+        }
+        
+        const { ConfigManager } = await import("./config-manager");
+        const configManager = new ConfigManager();
+        await configManager.setGitHubRepo(value);
+        console.log(`✅ GitHub repo set to: ${value}`);
+      } else if (action === "set-editor") {
+        if (!value) {
+          console.error("❌ Please specify an editor key");
+          process.exit(1);
+        }
+        
+        await editorManager.setDefaultEditor(value);
+        console.log(`✅ Default editor set to: ${editorManager.getEditorName(value)}`);
+      } else {
+        console.error(`❌ Unknown action: ${action}`);
+        console.log("Available actions: show, set-repo, set-editor");
+        process.exit(1);
+      }
     } catch (error) {
       console.error("❌ Error:", error);
       process.exit(1);

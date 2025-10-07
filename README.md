@@ -85,8 +85,12 @@ bun cli.ts triage -o owner -r repo \
 
 #### `inbox` - View Triaged Issues
 ```bash
-# View all issues
+# View all issues (table mode)
 bun cli.ts inbox
+
+# Interactive TUI mode 🎉 NEW!
+bun cli.ts inbox --interactive
+bun cli.ts inbox -i  # Short form
 
 # Filter by status
 bun cli.ts inbox --filter unread
@@ -98,8 +102,8 @@ bun cli.ts inbox --close no      # Issues that should NOT be closed
 bun cli.ts inbox --close unknown # Issues with unknown status
 bun cli.ts inbox --close not-no  # Issues that are yes or unknown (not explicitly no)
 
-# Combine filters
-bun cli.ts inbox --filter unread --close yes  # Unread issues that should be closed
+# Combine filters (works in both modes)
+bun cli.ts inbox --filter unread --close yes --interactive
 
 # Sort options
 bun cli.ts inbox --sort date
@@ -109,13 +113,36 @@ bun cli.ts inbox --sort date
 - `-f, --filter <type>`: Filter by status (all/read/unread, default: all)
 - `-s, --sort <field>`: Sort by field (number/date, default: number)
 - `--close <filter>`: Filter by SHOULD_CLOSE recommendation (yes/no/unknown/not-no)
+- `-i, --interactive`: Launch interactive TUI mode
 
-Shows a table with:
+**Table Mode** shows:
 - Issue number
 - Read/unread status
 - Triage date
 - Review date
 - Should close recommendation
+
+**Interactive TUI Mode** features:
+- **Scrollable table view**: Fixed-size table (120 chars wide) showing all key information
+- **Instant loading**: UI loads immediately, titles fetch via single bulk API call (~1-2s)
+- **Table columns**:
+  - **#**: Issue number
+  - **Status**: Read/Unread/Done indicators
+  - **Title**: Issue title (bulk-fetched from GitHub API, permanently cached)
+  - **Recommend**: Should close (🔴 Close) or keep (✅ Keep)
+  - **Model**: Claude model used (e.g., sonnet-4-5, haiku-4)
+- **Auto-scrolling**: Table automatically scrolls to keep selected issue visible
+- **Multi-level filtering**:
+  - Text search by issue number, title, or labels
+  - Status filters: All / Unread / Read / Done
+  - Recommendation filters: All / Should Close / Should Keep
+  - Filters combine together (AND logic)
+- **Quick keyboard shortcuts**:
+  - **Navigation**: `↑/↓` Navigate | `Enter` Open | `E` Choose editor | `W` Open in browser
+  - **Status**: `R` Read | `U` Unread | `D` Done | `Shift+D` Undone
+  - **Filters**: `1` All | `2` Unread | `3` Read | `4` Done | `5` Unread+NotDone | `C` Close | `K` Keep
+  - **Search**: `/` Text search | `ESC` Clear all filters
+  - **Help**: `?` Show help | `Q` Quit
 
 #### `review` - Review Triaged Issues
 ```bash
@@ -135,11 +162,13 @@ bun cli.ts review --all
 
 Displays the full triage analysis and automatically marks issues as read.
 
-#### `mark` - Mark Issues Read/Unread
+#### `mark` - Mark Issues Read/Unread/Done 🎉 UPDATED!
 ```bash
 # Mark specific issue
 bun cli.ts mark 123 --read
 bun cli.ts mark 123 --unread
+bun cli.ts mark 123 --done
+bun cli.ts mark 123 --not-done
 
 # Mark all as read
 bun cli.ts mark --all --read
@@ -148,7 +177,9 @@ bun cli.ts mark --all --read
 **Options:**
 - `-r, --read`: Mark as read
 - `-u, --unread`: Mark as unread
-- `-a, --all`: Apply to all issues
+- `-d, --done`: Mark as done (completed/resolved)
+- `-D, --not-done`: Mark as not done
+- `-a, --all`: Apply to all issues (only works with --read)
 
 #### `sync` - Sync with GitHub
 ```bash
@@ -162,7 +193,52 @@ Fetches closed issues from GitHub and marks them as read in your local review sy
 - `-r, --repo <repo>`: Repository name (required)
 - `-t, --token <token>`: GitHub token (defaults to GITHUB_TOKEN env var)
 
+#### `open` - Open Issue in Editor 🎉 NEW!
+```bash
+# Open with default editor
+bun cli.ts open 123
+
+# Open with specific editor
+bun cli.ts open 123 --editor zed
+bun cli.ts open 123 -e vim
+```
+
+Opens a triaged issue file in your preferred code editor. Automatically marks the issue as read after opening.
+
+**Supported Editors:**
+- Zed (`zed`)
+- Vim (`vim`)
+- Neovim (`nvim`)
+- Cursor (`cursor`)
+- VS Code (`code`)
+
+**Options:**
+- `-e, --editor <editor>`: Editor to use (zed/vim/nvim/cursor/code)
+
+The command auto-detects available editors on your system. If no default is set and no editor is specified, it will list available options.
+
+#### `config` - Manage Configuration 🎉 NEW!
+```bash
+# Show current configuration
+bun cli.ts config show
+
+# Set default editor
+bun cli.ts config set-editor zed
+bun cli.ts config set-editor vim
+```
+
+Manage your editor preferences. The default editor is used when opening issues via the TUI or `open` command.
+
+**Actions:**
+- `show` - Display current configuration and available editors
+- `set-editor <key>` - Set your default editor
+
+**Configuration File:**
+Settings are stored in `~/.github-triage-config.json`
+
 ## Review Workflow
+
+### Classic Workflow
 
 A typical workflow for triaging and reviewing issues:
 
@@ -186,6 +262,51 @@ A typical workflow for triaging and reviewing issues:
 4. **Sync Periodically**: Keep inbox clean
    ```bash
    bun cli.ts sync -o owner -r repo
+   ```
+
+### Interactive TUI Workflow 🎉 NEW!
+
+For a faster, more visual experience:
+
+1. **Initial Triage**: Same as above
+   ```bash
+   bun cli.ts triage -o owner -r repo -p ./codebase
+   ```
+
+2. **Launch Interactive Inbox**: Browse issues visually
+   ```bash
+   bun cli.ts inbox --interactive
+   ```
+
+3. **Navigate and Review**:
+   - Scrollable table shows all issues with key metadata
+   - Use `↑/↓` to browse through the table
+   - **Quick filters**:
+     - Press `2` for unread, `3` for read, `4` for done, `5` for unread+not-done
+     - Press `C` to show only "should close" issues
+     - Press `K` to show only "should keep" issues
+     - Press `/` to search by text
+     - Press `ESC` to clear all filters
+   - Press `Enter` to open full triage in your editor
+   - Press `W` to open issue on GitHub in your browser
+   - Press `R` to manually mark as read
+   - Press `D` to mark as done (e.g., after fixing)
+
+4. **Configure Settings** (one-time setup):
+   ```bash
+   # Set the GitHub repo (required for title fetching and web links)
+   bun cli.ts config set-repo owner/repo
+   
+   # Set your preferred default editor
+   bun cli.ts config set-editor zed  # or vim, cursor, code, nvim
+   
+   # View all settings
+   bun cli.ts config show
+   ```
+
+5. **Quick Open**: Open specific issues directly
+   ```bash
+   bun cli.ts open 123  # Opens in default editor
    ```
 
 ## How It Works

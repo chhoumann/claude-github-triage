@@ -12,7 +12,8 @@
     "dev": "bun --watch src/cli.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/react": "^18.3.12"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -21,6 +22,10 @@
     "@anthropic-ai/claude-agent-sdk": "^0.1.8",
     "@octokit/rest": "^22.0.0",
     "@octokit/types": "^14.1.0",
-    "commander": "^14.0.0"
+    "commander": "^14.0.0",
+    "ink": "^5.0.1",
+    "ink-text-input": "^6.0.0",
+    "listr2": "^9.0.4",
+    "react": "^18.3.1"
   }
 }

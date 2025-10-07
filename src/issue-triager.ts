@@ -1,5 +1,6 @@
 import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { RestEndpointMethodTypes } from "@octokit/rest";
+import { Listr } from "listr2";
 import { GitHubClient } from "./github";
 import { ReviewManager } from "./review-manager";
 
@@ -40,48 +41,25 @@ export class IssueTriage {
     const resultFile = Bun.file(resultPath);
     
     if (!force && await resultFile.exists()) {
-      console.log(`  ⏭️  Skipping issue #${issueNumber} - already triaged`);
       return;
     }
     
-    console.log(`  Fetching issue details...`);
     const issue = await this.githubClient.getIssue(owner, repo, issueNumber);
-
     const prompt = this.buildTriagePrompt(issue, owner, repo);
-
-    console.log(`  Analyzing with Claude Code SDK...`);
     const messages: SDKMessage[] = [];
-    const abortController = new AbortController();
 
-    // Add timeout to prevent hanging
-    const timeoutId = setTimeout(() => {
-      console.log(`  Analysis timeout - aborting...`);
-      abortController.abort();
-    }, 600000); // 10 minute timeout per issue
-
-    try {
-      for await (const message of query({
-        prompt,
-        abortController,
-        options: {
-          maxTurns: 100000,
-          cwd: projectPath,
-        },
-      })) {
-        messages.push(message);
-        if ("role" in message && message.role === "assistant") {
-          console.log(
-            `  Claude is analyzing... (turn ${messages.filter((m) => "role" in m && m.role === "assistant").length})`,
-          );
-        }
-      }
-    } finally {
-      clearTimeout(timeoutId);
+    for await (const message of query({
+      prompt,
+      options: {
+        maxTurns: 100000,
+        cwd: projectPath,
+        timeout: 3600000, // 1 hour in milliseconds
+      },
+    })) {
+      messages.push(message);
     }
 
-    console.log(`  Parsing response... (${messages.length} messages received)`);
     const lastMessage = messages[messages.length - 1];
-
     const DEBUG = true;
 
     if (DEBUG) {
@@ -100,10 +78,8 @@ export class IssueTriage {
       // Update review metadata
       await this.reviewManager.updateTriageMetadata(issueNumber);
     } else {
-      console.error(`No response from Claude for issue #${issueNumber}`);
+      throw new Error(`No response from Claude for issue #${issueNumber}`);
     }
-
-    console.log(`  Triage complete for issue #${issueNumber}`);
   }
 
   private buildTriagePrompt(issue: Issue, owner: string, repo: string): string {
@@ -150,41 +126,26 @@ SUGGESTED_RESPONSE:
       force?: boolean;
     },
   ) {
-    const concurrencyLimit = options?.concurrency || 3; // Default to 3 concurrent triages
-    const results: Promise<TriageResult>[] = [];
-    const activePromises = new Map<number, Promise<TriageResult>>();
-    let processedCount = 0;
+    const concurrencyLimit = options?.concurrency || 3;
     let skippedCount = 0;
-    let totalCount = 0;
+    let processedCount = 0;
+    let failedCount = 0;
 
-    console.log(`Starting issue triage with concurrency limit: ${concurrencyLimit}`);
-    if (options?.force) {
-      console.log(`Force mode enabled - will re-triage existing issues`);
-    }
-
-    // Helper function to wait for a slot to become available
-    const waitForSlot = async () => {
-      while (activePromises.size >= concurrencyLimit) {
-        await Promise.race(activePromises.values());
-      }
-    };
-
-    // Process issues from the generator
+    // Collect all issues first
+    const issuesToTriage: Array<{ number: number; title: string; html_url: string }> = [];
+    
     for await (const issue of this.githubClient.listIssuesPaginated(owner, repo, {
       state: options?.state,
       labels: options?.labels,
       sort: options?.sort,
       direction: options?.direction,
     })) {
-      // Check if we've reached the limit
-      if (options?.limit && processedCount >= options.limit) {
+      if (!issue.number) continue;
+      
+      // Check limit
+      if (options?.limit && issuesToTriage.length + skippedCount >= options.limit) {
         break;
       }
-
-      totalCount++;
-      
-      // Skip issues without numbers
-      if (!issue.number) continue;
 
       // Check if already triaged (unless force mode)
       if (!options?.force) {
@@ -192,79 +153,97 @@ SUGGESTED_RESPONSE:
         const resultFile = Bun.file(resultPath);
         if (await resultFile.exists()) {
           skippedCount++;
-          console.log(
-            `[${processedCount + skippedCount}/${options?.limit || "all"}] ⏭️  Skipping issue #${issue.number}: ${issue.title} (already triaged)`,
-          );
           continue;
         }
       }
 
-      // Wait for a slot to become available
-      await waitForSlot();
-
-      console.log(
-        `[${processedCount + 1}/${options?.limit || "all"}] Starting triage for issue #${issue.number}: ${issue.title}`,
-      );
-
-      // Create the triage promise
-      const triagePromise = this.triageIssue(
-        owner,
-        repo,
-        issue.number,
-        projectPath,
-        options?.force || false,
-      ).then(() => {
-        activePromises.delete(issue.number);
-        processedCount++;
-        console.log(`[${processedCount}/${options?.limit || totalCount}] Completed triage for issue #${issue.number}`);
-        return {
-          issue: {
-            number: issue.number,
-            title: issue.title,
-            url: issue.html_url,
-          },
-          recommendation: undefined, // triageIssue saves results to file, doesn't return them
-        };
-      }).catch((error) => {
-        activePromises.delete(issue.number);
-        processedCount++;
-        console.error(`[${processedCount}/${options?.limit || totalCount}] Failed to triage issue #${issue.number}:`, error);
-        return {
-          issue: {
-            number: issue.number,
-            title: issue.title,
-            url: issue.html_url,
-          },
-          recommendation: {
-            shouldClose: false,
-            labels: [],
-            confidence: "low" as const,
-            reasoning: `Error: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        };
+      issuesToTriage.push({
+        number: issue.number,
+        title: issue.title,
+        html_url: issue.html_url,
       });
 
-      // Add to active promises
-      activePromises.set(issue.number, triagePromise);
-      results.push(triagePromise);
-
-      // If we've reached the limit, break
-      if (options?.limit && processedCount + activePromises.size >= options.limit) {
+      if (options?.limit && issuesToTriage.length >= options.limit) {
         break;
       }
     }
 
-    // Wait for all remaining triages to complete
-    console.log(`Waiting for ${activePromises.size} remaining triages to complete...`);
-    const finalResults = await Promise.all(results);
-    
-    console.log(`\nTriage complete:`);
-    console.log(`  ✅ Processed: ${processedCount} issues`);
-    if (skippedCount > 0) {
-      console.log(`  ⏭️  Skipped: ${skippedCount} issues (already triaged)`);
+    if (issuesToTriage.length === 0) {
+      console.log("\n✨ No issues to triage!");
+      if (skippedCount > 0) {
+        console.log(`⏭️  Skipped ${skippedCount} already-triaged issues`);
+      }
+      return [];
     }
-    console.log(`  📊 Total found: ${totalCount} issues`);
-    
-    return finalResults;
+
+    // Create listr2 tasks
+    const tasks = new Listr(
+      issuesToTriage.map((issue) => ({
+        title: `Issue #${issue.number}: ${issue.title}`,
+        task: async (ctx, task) => {
+          const startTime = Date.now();
+          try {
+            await this.triageIssue(
+              owner,
+              repo,
+              issue.number,
+              projectPath,
+              options?.force || false,
+            );
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            task.title = `Issue #${issue.number}: ${issue.title} [${elapsed}s]`;
+            processedCount++;
+          } catch (error) {
+            failedCount++;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            task.title = `Issue #${issue.number}: ${issue.title} [${elapsed}s]`;
+            throw new Error(error instanceof Error ? error.message : String(error));
+          }
+        },
+      })),
+      {
+        concurrent: concurrencyLimit,
+        exitOnError: false,
+      },
+    );
+
+    // Print initial info
+    console.log(`\n🔍 Triaging ${issuesToTriage.length} issues for ${owner}/${repo}`);
+    console.log(`📁 Codebase: ${projectPath}`);
+    console.log(`⚙️  Concurrency: ${concurrencyLimit}`);
+    if (options?.force) {
+      console.log(`🔄 Force mode: enabled`);
+    }
+    if (skippedCount > 0) {
+      console.log(`⏭️  Skipped: ${skippedCount} already-triaged issues`);
+    }
+    console.log();
+
+    // Run tasks
+    try {
+      await tasks.run();
+    } catch (error) {
+      // Errors are handled per-task, continue to summary
+    }
+
+    // Print summary
+    console.log(`\n📊 Triage Summary:`);
+    console.log(`  ✅ Completed: ${processedCount} issues`);
+    if (failedCount > 0) {
+      console.log(`  ❌ Failed: ${failedCount} issues`);
+    }
+    if (skippedCount > 0) {
+      console.log(`  ⏭️  Skipped: ${skippedCount} issues`);
+    }
+    console.log(`  📁 Results: results/`);
+
+    return issuesToTriage.map((issue) => ({
+      issue: {
+        number: issue.number,
+        title: issue.title,
+        url: issue.html_url,
+      },
+      recommendation: undefined,
+    }));
   }
 }
