@@ -5,6 +5,8 @@ import { GitHubClient } from "./github";
 import { ReviewManager } from "./review-manager";
 
 type Issue = RestEndpointMethodTypes["issues"]["get"]["response"]["data"];
+type IssueComment =
+  RestEndpointMethodTypes["issues"]["listComments"]["response"]["data"][number];
 
 type TriageResult = {
   issue: {
@@ -48,8 +50,28 @@ export class IssueTriage {
       return;
     }
     
-    const issue = await this.githubClient.getIssue(owner, repo, issueNumber);
-    const prompt = this.buildTriagePrompt(issue, owner, repo);
+    const [issue, comments] = await Promise.all([
+      this.githubClient.getIssue(owner, repo, issueNumber),
+      this.githubClient.listIssueComments(owner, repo, issueNumber),
+    ]);
+
+    let triageActorLogin = "unknown-user";
+    try {
+      const authenticatedUser = await this.githubClient.getAuthenticatedUser();
+      if (authenticatedUser?.login) {
+        triageActorLogin = authenticatedUser.login;
+      }
+    } catch {
+      // The token might not have permission to read the authenticated user; fall back gracefully.
+    }
+
+    const prompt = this.buildTriagePrompt(
+      issue,
+      owner,
+      repo,
+      comments,
+      triageActorLogin,
+    );
     const messages: AgentMessage[] = [];
 
     for await (const message of this.agentAdapter.query(prompt, {
@@ -83,18 +105,59 @@ export class IssueTriage {
     }
   }
 
-  private buildTriagePrompt(issue: Issue, owner: string, repo: string): string {
+  private buildTriagePrompt(
+    issue: Issue,
+    owner: string,
+    repo: string,
+    comments: IssueComment[],
+    triageActorLogin: string,
+  ): string {
     const issueBody = issue.body || "No description provided";
     const truncatedBody =
       issueBody.length > 1000
         ? `${issueBody.substring(0, 1000)}...`
         : issueBody;
+    const MAX_COMMENTS = 20;
+    const totalComments = comments.length;
+    const MAX_COMMENT_LENGTH = 800;
+    const commentsToInclude = comments.slice(0, MAX_COMMENTS);
+    const commentsShownCount = commentsToInclude.length;
+    const formattedComments =
+      commentsToInclude.length > 0
+        ? commentsToInclude
+            .map((comment, index) => {
+              const author = comment.user?.login || "unknown-user";
+              const createdAt = comment.created_at
+                ? new Date(comment.created_at).toISOString()
+                : "unknown-date";
+              const rawBody = comment.body || "No comment body provided.";
+              const normalizedBody = rawBody.replace(/\r\n/g, "\n").trim();
+              const truncatedComment =
+                normalizedBody.length > MAX_COMMENT_LENGTH
+                  ? `${normalizedBody.slice(0, MAX_COMMENT_LENGTH)}...`
+                  : normalizedBody;
+              const safeBody = truncatedComment.length > 0
+                ? truncatedComment
+                : "(comment body was empty)";
+              return `Comment ${index + 1} by ${author} on ${createdAt}:\n${safeBody}`;
+            })
+            .join("\n\n")
+        : "No comments available on this issue.";
+    const remainingComments = comments.length - commentsToInclude.length;
+    const commentsFooter =
+      remainingComments > 0
+        ? `\n\n[${remainingComments} additional comment(s) not shown due to length limits]`
+        : "";
 
     return `Triage GitHub issue #${issue.number} for ${owner}/${repo}.
 
 Title: ${issue.title}
 Body: ${truncatedBody}
 Author: ${issue.user?.login}
+Authenticated triager (GitHub login): ${triageActorLogin}
+
+Issue comments (showing ${commentsShownCount} of ${totalComments}):
+${formattedComments}${commentsFooter}
 
 Search the codebase for relevant context, then provide a triage recommendation.
 
@@ -109,8 +172,9 @@ ANALYSIS:
 [Your detailed analysis and reasoning here]
 
 SUGGESTED_RESPONSE:
-[Optional: A helpful response to post on the issue]
-=== TRIAGE ANALYSIS END ===`;
+[Optional: A helpful response to post on the issue, writing as the triager]
+=== TRIAGE ANALYSIS END ===
+`;
   }
 
   async triageMultipleIssues(

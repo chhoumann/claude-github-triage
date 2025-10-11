@@ -1,4 +1,5 @@
 import { Octokit } from '@octokit/rest';
+import type { RestEndpointMethodTypes } from '@octokit/rest';
 
 export class GitHubClient {
   private octokit: Octokit;
@@ -49,6 +50,32 @@ export class GitHubClient {
     return data;
   }
 
+  async listIssueComments(owner: string, repo: string, issue_number: number) {
+    const comments: RestEndpointMethodTypes["issues"]["listComments"]["response"]["data"] = [];
+    let page = 1;
+    const perPage = 100;
+
+    while (true) {
+      const { data } = await this.octokit.issues.listComments({
+        owner,
+        repo,
+        issue_number,
+        page,
+        per_page: perPage,
+      });
+
+      comments.push(...data);
+
+      if (data.length < perPage) {
+        break;
+      }
+
+      page++;
+    }
+
+    return comments;
+  }
+
   async updateIssue(owner: string, repo: string, issue_number: number, update: {
     state?: 'open' | 'closed';
     labels?: string[];
@@ -71,6 +98,11 @@ export class GitHubClient {
       issue_number,
       body,
     });
+    return data;
+  }
+
+  async getAuthenticatedUser() {
+    const { data } = await this.octokit.users.getAuthenticated();
     return data;
   }
 
