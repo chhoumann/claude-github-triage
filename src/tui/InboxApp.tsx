@@ -42,6 +42,10 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [projectRoot, setProjectRoot] = useState<string>("results");
   const [showProjectSelect, setShowProjectSelect] = useState(false);
   const [availableProjects, setAvailableProjects] = useState<Array<{id: string, owner: string, repo: string}>>([]);
+
+  // Sorting state
+  const [sortField, setSortField] = useState<"number" | "triage-date" | "created" | "activity">("number");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   
   // Visual selection mode state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -66,7 +70,14 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
   useEffect(() => {
     applyFilter();
-  }, [allIssues, filterText, statusFilter, closeRecommendFilter]);
+  }, [allIssues, filterText, statusFilter, closeRecommendFilter, sortDirection]);
+
+  // Reload issues when sort changes
+  useEffect(() => {
+    if (currentProject) {
+      loadIssues();
+    }
+  }, [sortField]);
 
   // Initialize triage queue when project context is available
   useEffect(() => {
@@ -198,7 +209,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       
       await reviewManager.scanForNewIssues();
       
-      const issuesList = await reviewManager.getInbox(filter, sort, closeFilter);
+      const issuesList = await reviewManager.getInbox(filter, sortField, closeFilter);
       const statsData = await reviewManager.getStats();
       setAllIssues(issuesList);
       setStats(statsData);
@@ -206,7 +217,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       
       reviewManager.fetchMissingTitlesInBackground(async () => {
         await reviewManager.loadMetadata();
-        const updatedIssues = await reviewManager.getInbox(filter, sort, closeFilter);
+        const updatedIssues = await reviewManager.getInbox(filter, sortField, closeFilter);
         setAllIssues(updatedIssues);
       }).catch((err) => {
         console.error("Failed to fetch titles:", err);
@@ -248,6 +259,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       filtered = filtered.filter((i) => i.shouldClose === true);
     } else if (closeRecommendFilter === "keep") {
       filtered = filtered.filter((i) => i.shouldClose === false);
+    }
+
+    // Apply sort direction (reverse if ascending)
+    if (sortDirection === "asc") {
+      filtered = filtered.reverse();
     }
 
     setFilteredIssues(filtered);
@@ -677,6 +693,33 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       enqueueForTriage(lastAdapter);
     } else if (input === "s" || input === "S") {
       startSync();
+    } else if (input === "o") {
+      // Cycle through sort options
+      const sortOptions: Array<"number" | "triage-date" | "created" | "activity"> = ["number", "triage-date", "created", "activity"];
+      const currentIndex = sortOptions.indexOf(sortField);
+      const nextIndex = (currentIndex + 1) % sortOptions.length;
+      setSortField(sortOptions[nextIndex]!);
+
+      const sortNames = {
+        "number": "Issue #",
+        "triage-date": "Last Triaged",
+        "created": "Created Date",
+        "activity": "Last Activity"
+      };
+
+      setToast({
+        message: `Sort: ${sortNames[sortOptions[nextIndex]!]}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
+    } else if (input === "O") {
+      // Reverse sort direction
+      setSortDirection((prev) => prev === "asc" ? "desc" : "asc");
+      setToast({
+        message: `Sort direction: ${sortDirection === "asc" ? "Descending" : "Ascending"}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
     } else if (key.escape) {
       if (selectionMode) {
         // First ESC clears selection, second ESC exits selection mode
@@ -751,6 +794,12 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text>  <Text color="green">T</Text> - Bulk triage (with parameters)</Text>
           <Text>  <Text color="green">Shift+T</Text> - Quick bulk triage (last params)</Text>
           <Text>  <Text color="green">ESC</Text> - Clear selection (in selection mode)</Text>
+
+          <Box marginTop={1}>
+            <Text bold>Sorting:</Text>
+          </Box>
+          <Text>  <Text color="green">O</Text> - Cycle sort field (Issue #, Last Triaged, Created, Activity)</Text>
+          <Text>  <Text color="green">Shift+O</Text> - Reverse sort direction (asc/desc)</Text>
 
           <Box marginTop={1}>
             <Text bold>Other:</Text>
@@ -888,6 +937,8 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         selectedCount={selectedIssues.size}
         syncing={isSyncing}
         lastSyncAt={lastSyncAt}
+        sortField={sortField}
+        sortDirection={sortDirection}
       />
     </Box>
   );

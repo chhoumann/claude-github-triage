@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { IssueMetadata } from "../review-manager";
+import { formatRelativeTime } from "./dateUtils";
 
 interface TableViewProps {
   issues: IssueMetadata[];
@@ -54,15 +55,15 @@ export const TableView: React.FC<TableViewProps> = ({
 
   const formatModel = (model: string | undefined): string => {
     if (!model) return "".padEnd(15);
-    
+
     // Handle adapter names (claude, codex)
     if (model === "claude" || model === "codex") {
       return model.padEnd(15);
     }
-    
+
     // Extract just the model name (e.g., "sonnet-4-5" from "claude-sonnet-4-5-20250929")
     const match = model.match(/claude-([\w-]+)-\d{8}/);
-    if (match) {
+    if (match && match[1]) {
       return match[1].padEnd(15);
     }
     return model.substring(0, 14).padEnd(15);
@@ -74,7 +75,7 @@ export const TableView: React.FC<TableViewProps> = ({
       <Box>
         <Text bold dimColor>
           {selectionMode ? "[ ] ".padEnd(4) : ""}
-          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(selectionMode ? 56 : 60)} {"Recommend".padEnd(11)} {"Model".padEnd(15)}
+          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(selectionMode ? 30 : 34)} {"Recommend".padEnd(11)} {"Triaged".padEnd(10)} {"Created".padEnd(10)} {"Activity".padEnd(10)} {"Model".padEnd(15)}
         </Text>
       </Box>
       <Box>
@@ -87,7 +88,7 @@ export const TableView: React.FC<TableViewProps> = ({
         const isSelected = actualIndex === selectedIndex;
         const isChecked = selectedIssues.has(issue.issueNumber);
         const rowStatus = perRowStatus.get(issue.issueNumber);
-        
+
         return (
           <Box key={issue.issueNumber}>
             <Text
@@ -98,8 +99,11 @@ export const TableView: React.FC<TableViewProps> = ({
               {isSelected ? "▶ " : "  "}
               {`#${issue.issueNumber}`.padEnd(7)}
               {formatStatus(issue, rowStatus).padEnd(14)}
-              {truncate(issue.title, selectionMode ? 56 : 60)}
+              {truncate(issue.title, selectionMode ? 30 : 34)}
               {formatRecommendation(issue).padEnd(11)}
+              {formatRelativeTime(issue.triageDate).padEnd(10)}
+              {formatRelativeTime(issue.createdAt).padEnd(10)}
+              {formatRelativeTime(issue.updatedAt).padEnd(10)}
               {formatModel(issue.model)}
             </Text>
           </Box>

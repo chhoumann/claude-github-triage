@@ -13,6 +13,8 @@ export interface IssueMetadata {
   labels?: string[];
   confidence?: string;
   model?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MetadataStore {
@@ -90,13 +92,13 @@ export class ReviewManager {
     if (!repoInfo) return;
 
     const { owner, repo } = repoInfo;
-    
-    // Check if we have any issues without titles
-    const hasIssuesWithoutTitles = Object.values(this.metadata.issues).some(
-      issue => !issue.title
+
+    // Check if we have any issues without titles or dates
+    const hasIssuesWithoutData = Object.values(this.metadata.issues).some(
+      issue => !issue.title || !issue.createdAt || !issue.updatedAt
     );
-    
-    if (!hasIssuesWithoutTitles) return;
+
+    if (!hasIssuesWithoutData) return;
 
     try {
       // Fetch ALL issues in one call - much faster!
@@ -104,31 +106,44 @@ export class ReviewManager {
       const result = Bun.spawnSync([
         "gh", "issue", "list",
         "-R", `${owner}/${repo}`,
-        "--json", "number,title",
+        "--json", "number,title,createdAt,updatedAt",
         "--limit", "1000",
         "--state", "all"  // Get both open and closed
       ]);
-      
+
       if (result.exitCode === 0) {
         const allIssues = JSON.parse(result.stdout.toString()) as Array<{
           number: number;
           title: string;
+          createdAt: string;
+          updatedAt: string;
         }>;
-        
+
         // Create a map for quick lookup
-        const titleMap = new Map(
-          allIssues.map(issue => [issue.number.toString(), issue.title])
+        const issueMap = new Map(
+          allIssues.map(issue => [issue.number.toString(), issue])
         );
-        
-        // Update all our issues that are missing titles
+
+        // Update all our issues that are missing data
         let updated = false;
         for (const [issueId, issue] of Object.entries(this.metadata.issues)) {
-          if (!issue.title && titleMap.has(issueId)) {
-            issue.title = titleMap.get(issueId);
-            updated = true;
+          const ghIssue = issueMap.get(issueId);
+          if (ghIssue && issue) {
+            if (!issue.title && ghIssue.title) {
+              issue.title = ghIssue.title;
+              updated = true;
+            }
+            if (!issue.createdAt && ghIssue.createdAt) {
+              issue.createdAt = ghIssue.createdAt;
+              updated = true;
+            }
+            if (!issue.updatedAt && ghIssue.updatedAt) {
+              issue.updatedAt = ghIssue.updatedAt;
+              updated = true;
+            }
           }
         }
-        
+
         // Save and trigger update if anything changed
         if (updated) {
           await this.saveMetadata();
@@ -157,56 +172,63 @@ export class ReviewManager {
     
     for await (const file of glob.scan()) {
       const match = file.match(/issue-(\d+)-triage\.md$/);
-      if (match) {
+      if (match && match[1]) {
         const issueNumber = match[1];
-        
+        const stats = await Bun.file(file).stat();
+        const fileMtime = stats.mtime.toISOString();
+
         if (!this.metadata.issues[issueNumber]) {
-          const stats = await Bun.file(file).stat();
           this.metadata.issues[issueNumber] = {
             issueNumber: parseInt(issueNumber),
-            triageDate: stats.mtime.toISOString(),
+            triageDate: fileMtime,
             reviewStatus: "unread",
           };
         }
-        
+
         const content = await Bun.file(file).text();
         const issue = this.metadata.issues[issueNumber];
-        
-        const titleMatch = content.match(/^#\s+Issue\s+#\d+:\s*(.+)$/m);
-        if (titleMatch) {
-          issue.title = titleMatch[1].trim();
-        }
-        
-        const shouldCloseMatch = content.match(/SHOULD_CLOSE:\s*(Yes|No)/i);
-        if (shouldCloseMatch) {
-          issue.shouldClose = shouldCloseMatch[1].toLowerCase() === "yes";
-        }
-        
-        const labelsMatch = content.match(/LABELS:\s*(.+)$/m);
-        if (labelsMatch) {
-          const labelsStr = labelsMatch[1].trim();
-          issue.labels = labelsStr ? labelsStr.split(',').map(l => l.trim()).filter(l => l) : [];
-        }
-        
-        const confidenceMatch = content.match(/CONFIDENCE:\s*(High|Medium|Low)/i);
-        if (confidenceMatch) {
-          issue.confidence = confidenceMatch[1];
-        }
-        
-        const debugPath = fs.existsSync(debugDir)
-          ? `${debugDir}/issue-${issueNumber}-triage-debug.json`
-          : `${this.projectRoot}/issue-${issueNumber}-triage-debug.json`;
-        
-        const debugFile = Bun.file(debugPath);
-        if (await debugFile.exists()) {
-          try {
-            const debugContent = await debugFile.text();
-            const debugData = JSON.parse(debugContent);
-            if (Array.isArray(debugData) && debugData.length > 0 && debugData[0].model) {
-              issue.model = debugData[0].model;
+
+        if (issue) {
+          // Update triageDate if file was modified (re-triaged)
+          if (new Date(fileMtime).getTime() > new Date(issue.triageDate).getTime()) {
+            issue.triageDate = fileMtime;
+          }
+          const titleMatch = content.match(/^#\s+Issue\s+#\d+:\s*(.+)$/m);
+          if (titleMatch && titleMatch[1]) {
+            issue.title = titleMatch[1].trim();
+          }
+
+          const shouldCloseMatch = content.match(/SHOULD_CLOSE:\s*(Yes|No)/i);
+          if (shouldCloseMatch && shouldCloseMatch[1]) {
+            issue.shouldClose = shouldCloseMatch[1].toLowerCase() === "yes";
+          }
+
+          const labelsMatch = content.match(/LABELS:\s*(.+)$/m);
+          if (labelsMatch && labelsMatch[1]) {
+            const labelsStr = labelsMatch[1].trim();
+            issue.labels = labelsStr ? labelsStr.split(',').map(l => l.trim()).filter(l => l) : [];
+          }
+
+          const confidenceMatch = content.match(/CONFIDENCE:\s*(High|Medium|Low)/i);
+          if (confidenceMatch && confidenceMatch[1]) {
+            issue.confidence = confidenceMatch[1];
+          }
+
+          const debugPath = fs.existsSync(debugDir)
+            ? `${debugDir}/issue-${issueNumber}-triage-debug.json`
+            : `${this.projectRoot}/issue-${issueNumber}-triage-debug.json`;
+
+          const debugFile = Bun.file(debugPath);
+          if (await debugFile.exists()) {
+            try {
+              const debugContent = await debugFile.text();
+              const debugData = JSON.parse(debugContent);
+              if (Array.isArray(debugData) && debugData.length > 0 && debugData[0].model) {
+                issue.model = debugData[0].model;
+              }
+            } catch (err) {
+              // Ignore parse errors
             }
-          } catch (err) {
-            // Ignore parse errors
           }
         }
       }
@@ -239,36 +261,42 @@ export class ReviewManager {
 
   async markAllAsRead(): Promise<void> {
     await this.scanForNewIssues();
-    
+
     const now = new Date().toISOString();
     for (const issueId in this.metadata.issues) {
       const issue = this.metadata.issues[issueId];
-      issue.reviewStatus = "read";
-      issue.reviewDate = now;
+      if (issue) {
+        issue.reviewStatus = "read";
+        issue.reviewDate = now;
+      }
     }
-    
+
     await this.saveMetadata();
   }
 
   async markAsDone(issueNumber: number, done: boolean = true): Promise<void> {
     await this.scanForNewIssues();
-    
+
     const issue = this.metadata.issues[issueNumber.toString()];
     if (issue) {
-      issue.isDone = done;
+      if (done) {
+        issue.isDone = true;
+      } else {
+        issue.isDone = false;
+      }
       await this.saveMetadata();
     }
   }
 
   async getInbox(
     filter?: "all" | "read" | "unread",
-    sort?: "number" | "date",
+    sort?: "number" | "date" | "triage-date" | "created" | "activity",
     closeFilter?: "yes" | "no" | "unknown" | "not-no",
   ): Promise<IssueMetadata[]> {
     await this.scanForNewIssues();
-    
+
     let issues = Object.values(this.metadata.issues);
-    
+
     // Apply read/unread filter
     if (filter === "read") {
       issues = issues.filter((i) => i.reviewStatus === "read");
@@ -288,23 +316,39 @@ export class ReviewManager {
         issues = issues.filter((i) => i.shouldClose !== false);
       }
     }
-    
+
     // Apply sort
-    if (sort === "date") {
+    if (sort === "date" || sort === "triage-date") {
+      // Sort by when we triaged the issue
       issues.sort(
         (a, b) =>
           new Date(b.triageDate).getTime() - new Date(a.triageDate).getTime(),
       );
+    } else if (sort === "created") {
+      // Sort by when the issue was created on GitHub
+      issues.sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bTime - aTime;
+      });
+    } else if (sort === "activity") {
+      // Sort by when the issue was last updated on GitHub
+      issues.sort((a, b) => {
+        const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        return bTime - aTime;
+      });
     } else {
+      // Default: sort by issue number
       issues.sort((a, b) => b.issueNumber - a.issueNumber);
     }
-    
+
     return issues;
   }
 
   async getNextUnread(): Promise<IssueMetadata | null> {
     const unread = await this.getInbox("unread", "number");
-    return unread.length > 0 ? unread[0] : null;
+    return unread.length > 0 && unread[0] ? unread[0] : null;
   }
 
   async getStats(): Promise<{ total: number; read: number; unread: number }> {

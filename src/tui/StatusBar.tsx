@@ -35,6 +35,8 @@ interface StatusBarProps {
   selectedCount?: number;
   syncing?: boolean;
   lastSyncAt?: number | null;
+  sortField?: "number" | "triage-date" | "created" | "activity";
+  sortDirection?: "asc" | "desc";
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -48,7 +50,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   selectedCount = 0,
   syncing = false,
   lastSyncAt = null,
+  sortField = "number",
+  sortDirection = "desc",
 }) => {
+  const sortNames = {
+    "number": "Issue #",
+    "triage-date": "Triaged",
+    "created": "Created",
+    "activity": "Activity"
+  };
+
+  const sortArrow = sortDirection === "desc" ? "↓" : "↑";
   return (
     <Box borderStyle="single" borderTop={true} paddingX={1}>
       <Box flexDirection="column" width="100%">
@@ -69,20 +81,24 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             </Text>
           </Box>
           <Box>
+            <Text>
+              <Text dimColor>Sort: </Text>
+              <Text color="cyan">{sortNames[sortField]} {sortArrow}</Text>
+            </Text>
             {filter !== "all" && (
               <Text>
-                <Text dimColor>Filter: </Text>
+                <Text dimColor> | Filter: </Text>
                 <Text color="cyan">{filter}</Text>
-                <Text> </Text>
               </Text>
             )}
             {syncing ? (
               <Text>
+                <Text dimColor> | </Text>
                 <Text color="cyan">⟳ Syncing </Text>
                 <Spinner />
               </Text>
             ) : lastSyncAt ? (
-              <Text dimColor>⟳ {formatTimeAgo(lastSyncAt)}</Text>
+              <Text dimColor> | ⟳ {formatTimeAgo(lastSyncAt)}</Text>
             ) : null}
           </Box>
         </Box>
@@ -98,7 +114,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   {"Space Toggle | A All | I Invert | V Exit | ESC Clear"}
                 </>
               ) : (
-                "↑/↓ Nav | Enter Open | W Web | D Done | R/U Mark | 1-5 Status | C/K Close | / Search | S Sync | V Select | ? Help"
+                "↑/↓ Nav | Enter Open | W Web | D Done | R/U Mark | 1-5 Status | C/K Close | / Search | O Sort | S Sync | V Select | ? Help"
               )}
             </Text>
           </Box>
