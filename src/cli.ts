@@ -318,7 +318,7 @@ program
 
 program
   .command("sync")
-  .description("Sync with GitHub - mark closed issues as read")
+  .description("Sync with GitHub - mark closed issues as read and done")
   .requiredOption("-o, --owner <owner>", "Repository owner")
   .requiredOption("-r, --repo <repo>", "Repository name")
   .requiredOption(
@@ -358,10 +358,18 @@ program
             
             if (issueMetadata && issueMetadata.reviewStatus === "unread") {
               await reviewManager.markAsRead(issue.number);
-              console.log(`✅ Marked issue #${issue.number} as read (closed)`);
+              await reviewManager.markAsDone(issue.number, true);
+              console.log(`✅ Marked issue #${issue.number} as read and done (closed)`);
               totalMarked++;
             } else if (issueMetadata && issueMetadata.reviewStatus === "read") {
-              alreadyMarked.push(issue.number);
+              // Still mark as done even if already read
+              if (!issueMetadata.isDone) {
+                await reviewManager.markAsDone(issue.number, true);
+                console.log(`✅ Marked issue #${issue.number} as done (closed, already read)`);
+                totalMarked++;
+              } else {
+                alreadyMarked.push(issue.number);
+              }
             }
           }
         }
@@ -372,10 +380,10 @@ program
       
       console.log(`\n✨ Sync complete!`);
       if (totalMarked > 0) {
-        console.log(`📖 Marked ${totalMarked} closed issues as read`);
+        console.log(`📖 Marked ${totalMarked} closed issues as read and done`);
       }
       if (alreadyMarked.length > 0) {
-        console.log(`✓ ${alreadyMarked.length} closed issues were already marked as read`);
+        console.log(`✓ ${alreadyMarked.length} closed issues were already marked as read and done`);
       }
       
       // Show updated stats
