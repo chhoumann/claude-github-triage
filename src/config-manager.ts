@@ -113,6 +113,12 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
+  async removeProject(id: string): Promise<void> {
+    if (!this.config.projects) return;
+    delete this.config.projects[id];
+    await this.saveConfig();
+  }
+
   listProjects(): Array<ProjectConfig & { id: string }> {
     if (!this.config.projects) return [];
     return Object.entries(this.config.projects).map(([id, config]) => ({

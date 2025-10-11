@@ -6,12 +6,18 @@ interface TableViewProps {
   issues: IssueMetadata[];
   selectedIndex: number;
   visibleRows?: number;
+  selectionMode?: boolean;
+  selectedIssues?: Set<number>;
+  perRowStatus?: Map<number, "idle" | "queued" | "running" | "done" | "skipped" | "error">;
 }
 
 export const TableView: React.FC<TableViewProps> = ({
   issues,
   selectedIndex,
   visibleRows = 20,
+  selectionMode = false,
+  selectedIssues = new Set(),
+  perRowStatus = new Map(),
 }) => {
   // Calculate scroll offset to keep selected item visible
   const scrollOffset = Math.max(
@@ -21,7 +27,13 @@ export const TableView: React.FC<TableViewProps> = ({
   
   const visibleIssues = issues.slice(scrollOffset, scrollOffset + visibleRows);
   
-  const formatStatus = (issue: IssueMetadata): string => {
+  const formatStatus = (issue: IssueMetadata, rowStatus?: string): string => {
+    // Show bulk triage status if running
+    if (rowStatus === "running") return "⏳ Triaging";
+    if (rowStatus === "done") return "✅ Done";
+    if (rowStatus === "error") return "❌ Failed";
+    if (rowStatus === "skipped") return "⏭ Skipped";
+    
     const parts: string[] = [];
     if (issue.reviewStatus === "unread") parts.push("Unread");
     else parts.push("Read");
@@ -61,17 +73,20 @@ export const TableView: React.FC<TableViewProps> = ({
       {/* Header */}
       <Box>
         <Text bold dimColor>
-          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(60)} {"Recommend".padEnd(11)} {"Model".padEnd(15)}
+          {selectionMode ? "[ ] ".padEnd(4) : ""}
+          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(selectionMode ? 56 : 60)} {"Recommend".padEnd(11)} {"Model".padEnd(15)}
         </Text>
       </Box>
       <Box>
-        <Text dimColor>{"─".repeat(120)}</Text>
+        <Text dimColor>{"─".repeat(selectionMode ? 124 : 120)}</Text>
       </Box>
 
       {/* Rows */}
       {visibleIssues.map((issue, idx) => {
         const actualIndex = scrollOffset + idx;
         const isSelected = actualIndex === selectedIndex;
+        const isChecked = selectedIssues.has(issue.issueNumber);
+        const rowStatus = perRowStatus.get(issue.issueNumber);
         
         return (
           <Box key={issue.issueNumber}>
@@ -79,10 +94,11 @@ export const TableView: React.FC<TableViewProps> = ({
               backgroundColor={isSelected ? "blue" : undefined}
               color={issue.reviewStatus === "unread" ? "yellow" : "gray"}
             >
+              {selectionMode ? (isChecked ? "[✓] " : "[ ] ") : ""}
               {isSelected ? "▶ " : "  "}
               {`#${issue.issueNumber}`.padEnd(7)}
-              {formatStatus(issue).padEnd(14)}
-              {truncate(issue.title, 60)}
+              {formatStatus(issue, rowStatus).padEnd(14)}
+              {truncate(issue.title, selectionMode ? 56 : 60)}
               {formatRecommendation(issue).padEnd(11)}
               {formatModel(issue.model)}
             </Text>

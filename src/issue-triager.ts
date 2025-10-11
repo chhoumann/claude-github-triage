@@ -22,6 +22,18 @@ type TriageResult = {
   };
 };
 
+export type TriageRunOptions = {
+  maxTurns?: number;
+  timeoutMs?: number;
+  debug?: boolean;
+};
+
+export type TriageProgress =
+  | { type: "started"; issueNumber: number }
+  | { type: "skipped"; issueNumber: number }
+  | { type: "success"; issueNumber: number; elapsedMs: number }
+  | { type: "error"; issueNumber: number; elapsedMs: number; error: string };
+
 export class IssueTriage {
   private githubClient: GitHubClient;
   private reviewManager: ReviewManager;
@@ -51,6 +63,7 @@ export class IssueTriage {
     issueNumber: number,
     projectPath: string,
     force = false,
+    runOptions?: TriageRunOptions,
   ): Promise<void> {
     const resultPath = `${this.triagePath}/issue-${issueNumber}-triage.md`;
     const resultFile = Bun.file(resultPath);
@@ -83,16 +96,19 @@ export class IssueTriage {
     );
     const messages: AgentMessage[] = [];
 
+    const maxTurns = runOptions?.maxTurns ?? 100000;
+    const timeout = runOptions?.timeoutMs ?? 3600000;
+
     for await (const message of this.agentAdapter.query(prompt, {
-      maxTurns: 100000,
+      maxTurns,
       cwd: projectPath,
-      timeout: 3600000, // 1 hour in milliseconds
+      timeout,
     })) {
       messages.push(message);
     }
 
     const lastMessage = messages[messages.length - 1];
-    const DEBUG = true;
+    const DEBUG = runOptions?.debug ?? true;
 
     if (DEBUG) {
       Bun.write(
@@ -318,5 +334,88 @@ SUGGESTED_RESPONSE:
       },
       recommendation: undefined,
     }));
+  }
+
+  async triageIssuesList(
+    owner: string,
+    repo: string,
+    projectPath: string,
+    issueNumbers: number[],
+    options?: {
+      concurrency?: number;
+      force?: boolean;
+      run?: TriageRunOptions;
+      onProgress?: (e: TriageProgress) => void;
+    },
+  ): Promise<void> {
+    const concurrencyLimit = options?.concurrency || 3;
+    let skippedCount = 0;
+    let processedCount = 0;
+    let failedCount = 0;
+
+    // Check which issues need triaging
+    const issuesToTriage: number[] = [];
+    
+    for (const issueNumber of issueNumbers) {
+      if (!options?.force) {
+        const resultPath = `${this.triagePath}/issue-${issueNumber}-triage.md`;
+        const resultFile = Bun.file(resultPath);
+        if (await resultFile.exists()) {
+          skippedCount++;
+          options?.onProgress?.({ type: "skipped", issueNumber });
+          continue;
+        }
+      }
+      issuesToTriage.push(issueNumber);
+    }
+
+    if (issuesToTriage.length === 0) {
+      return;
+    }
+
+    // Create listr2 tasks
+    const tasks = new Listr(
+      issuesToTriage.map((issueNumber) => ({
+        title: `Issue #${issueNumber}`,
+        task: async (ctx, task) => {
+          const startTime = Date.now();
+          options?.onProgress?.({ type: "started", issueNumber });
+          
+          try {
+            await this.triageIssue(
+              owner,
+              repo,
+              issueNumber,
+              projectPath,
+              options?.force || false,
+              options?.run,
+            );
+            const elapsed = Date.now() - startTime;
+            task.title = `Issue #${issueNumber} [${(elapsed / 1000).toFixed(1)}s]`;
+            processedCount++;
+            options?.onProgress?.({ type: "success", issueNumber, elapsedMs: elapsed });
+          } catch (error) {
+            failedCount++;
+            const elapsed = Date.now() - startTime;
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            task.title = `Issue #${issueNumber} [${(elapsed / 1000).toFixed(1)}s] ❌`;
+            options?.onProgress?.({ type: "error", issueNumber, elapsedMs: elapsed, error: errorMsg });
+            throw new Error(errorMsg);
+          }
+        },
+      })),
+      {
+        concurrent: concurrencyLimit,
+        exitOnError: false,
+        rendererOptions: { showSubtasks: false },
+      },
+    );
+
+    // Run tasks
+    try {
+      await tasks.run();
+    } catch (error) {
+      // Errors are handled per-task via onProgress
+    }
   }
 }
