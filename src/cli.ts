@@ -21,14 +21,13 @@ program
 program
   .command("triage")
   .description("Triage GitHub issues for a repository")
-  .requiredOption("-o, --owner <owner>", "Repository owner")
-  .requiredOption("-r, --repo <repo>", "Repository name")
-  .requiredOption(
+  .option("-o, --owner <owner>", "Repository owner")
+  .option("-r, --repo <repo>", "Repository name")
+  .option(
     "-t, --token <token>",
     "GitHub personal access token",
-    process.env.GITHUB_TOKEN,
   )
-  .option("-p, --path <path>", "Path to the project codebase", process.cwd())
+  .option("-p, --path <path>", "Path to the project codebase")
   .option("-i, --issue <number>", "Specific issue number to triage")
   .option("-s, --state <state>", "Issue state filter (open/closed/all)", "open")
   .option("-l, --labels <labels...>", "Filter by labels")
@@ -48,18 +47,36 @@ program
   )
   .action(async (options) => {
     try {
+      const { ProjectContext } = await import("./project-context");
+      
+      const ctx = await ProjectContext.resolve({
+        owner: options.owner,
+        repo: options.repo,
+        token: options.token,
+        codePath: options.path,
+      });
+      
+      await ctx.ensureDirs();
+      const migrated = await ctx.migrateLegacyIfNeeded();
+      
       const adapterType = options.adapter || "claude";
       const adapter = adapterType === "codex" ? new CodexAdapter() : new ClaudeAdapter();
-      const triager = new IssueTriage(options.token, adapter, adapterType);
-      const projectPath = path.resolve(options.path);
+      const triager = new IssueTriage(
+        ctx.token,
+        adapter,
+        adapterType,
+        ctx.paths.triage,
+        ctx.paths.debug
+      );
+      const projectPath = path.resolve(ctx.codePath);
 
       if (options.issue) {
         const issueNum = parseInt(options.issue);
-        const resultPath = `results/issue-${issueNum}-triage.md`;
+        const resultPath = path.join(ctx.paths.triage, `issue-${issueNum}-triage.md`);
         const resultFile = Bun.file(resultPath);
         const exists = await resultFile.exists();
         
-        console.log(`🔍 Triaging issue #${issueNum} for ${options.owner}/${options.repo}`);
+        console.log(`🔍 Triaging issue #${issueNum} for ${ctx.owner}/${ctx.repo}`);
         console.log(`📁 Using codebase at: ${projectPath}`);
         console.log(`🤖 Using adapter: ${adapterType}`);
         
@@ -72,11 +89,10 @@ program
           console.log();
         }
         
-        // Triage single issue
         console.log(`Analyzing issue #${issueNum}...`);
         await triager.triageIssue(
-          options.owner,
-          options.repo,
+          ctx.owner,
+          ctx.repo,
           issueNum,
           projectPath,
           options.force,
@@ -86,10 +102,9 @@ program
           `\n📋 Analysis complete. Results saved to: ${resultPath}`,
         );
       } else {
-        // Triage multiple issues
         await triager.triageMultipleIssues(
-          options.owner,
-          options.repo,
+          ctx.owner,
+          ctx.repo,
           projectPath,
           {
             state: options.state as "open" | "closed" | "all",
@@ -111,17 +126,24 @@ program
 program
   .command("test")
   .description("Test GitHub connection")
-  .requiredOption("-o, --owner <owner>", "Repository owner")
-  .requiredOption("-r, --repo <repo>", "Repository name")
-  .requiredOption(
+  .option("-o, --owner <owner>", "Repository owner")
+  .option("-r, --repo <repo>", "Repository name")
+  .option(
     "-t, --token <token>",
     "GitHub personal access token",
-    process.env.GITHUB_TOKEN,
   )
   .action(async (options) => {
     try {
-      const client = new GitHubClient(options.token);
-      const repo = await client.getRepository(options.owner, options.repo);
+      const { ProjectContext } = await import("./project-context");
+      
+      const ctx = await ProjectContext.resolve({
+        owner: options.owner,
+        repo: options.repo,
+        token: options.token,
+      });
+      
+      const client = new GitHubClient(ctx.token);
+      const repo = await client.getRepository(ctx.owner, ctx.repo);
 
       console.log("✅ Successfully connected to GitHub!");
       console.log(`📦 Repository: ${repo.full_name}`);
@@ -143,7 +165,6 @@ program
   .option("--table", "Use legacy table mode instead of interactive TUI")
   .action(async (options) => {
     try {
-      // Interactive TUI mode (default)
       if (!options.table) {
         render(
           React.createElement(InboxApp, {
@@ -155,8 +176,12 @@ program
         return;
       }
 
-      // Legacy table mode
-      const reviewManager = new ReviewManager();
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      await ctx.migrateLegacyIfNeeded();
+      
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.scanForNewIssues();
       const issues = await reviewManager.getInbox(
         options.filter as "all" | "read" | "unread",
@@ -209,13 +234,17 @@ program
   .option("-a, --all", "Review all unread issues")
   .action(async (options) => {
     try {
-      const reviewManager = new ReviewManager();
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      await ctx.migrateLegacyIfNeeded();
+      
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.scanForNewIssues();
       
       if (options.issue) {
-        // Review specific issue
         const issueNumber = parseInt(options.issue);
-        await reviewIssue(issueNumber, reviewManager);
+        await reviewIssue(issueNumber, reviewManager, ctx.paths.triage);
       } else {
         // Review next unread or all
         const unreadIssues = await reviewManager.getInbox("unread", "number");
@@ -236,7 +265,7 @@ program
             
             const issue = unreadIssues[i];
             if (issue) {
-              await reviewIssue(issue.issueNumber, reviewManager);
+              await reviewIssue(issue.issueNumber, reviewManager, ctx.paths.triage);
             }
             
             if (i < unreadIssues.length - 1) {
@@ -247,10 +276,9 @@ program
           
           console.log("\n✅ All issues reviewed!");
         } else {
-          // Review next unread
           const nextIssue = unreadIssues[0];
           if (nextIssue) {
-            await reviewIssue(nextIssue.issueNumber, reviewManager);
+            await reviewIssue(nextIssue.issueNumber, reviewManager, ctx.paths.triage);
           }
           
           if (unreadIssues.length > 1) {
@@ -275,7 +303,11 @@ program
   .option("-a, --all", "Mark all issues")
   .action(async (issue, options) => {
     try {
-      const reviewManager = new ReviewManager();
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.loadMetadata();
       
       const hasAction = options.read || options.unread || options.done || options.notDone;
@@ -319,28 +351,35 @@ program
 program
   .command("sync")
   .description("Sync with GitHub - mark closed issues as read and done")
-  .requiredOption("-o, --owner <owner>", "Repository owner")
-  .requiredOption("-r, --repo <repo>", "Repository name")
-  .requiredOption(
+  .option("-o, --owner <owner>", "Repository owner")
+  .option("-r, --repo <repo>", "Repository name")
+  .option(
     "-t, --token <token>",
     "GitHub personal access token",
-    process.env.GITHUB_TOKEN,
   )
   .action(async (options) => {
     try {
-      const githubClient = new GitHubClient(options.token);
-      const reviewManager = new ReviewManager();
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({
+        owner: options.owner,
+        repo: options.repo,
+        token: options.token,
+      });
+      
+      await ctx.ensureDirs();
+      
+      const githubClient = new GitHubClient(ctx.token);
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.loadMetadata();
       
-      console.log(`🔄 Syncing with ${options.owner}/${options.repo}...`);
+      console.log(`🔄 Syncing with ${ctx.owner}/${ctx.repo}...`);
       
       let page = 1;
       let totalMarked = 0;
       const alreadyMarked: number[] = [];
       
-      // Get all closed issues
       while (true) {
-        const issues = await githubClient.listIssues(options.owner, options.repo, {
+        const issues = await githubClient.listIssues(ctx.owner, ctx.repo, {
           state: "closed",
           per_page: 100,
           page,
@@ -349,8 +388,7 @@ program
         if (issues.length === 0) break;
         
         for (const issue of issues) {
-          // Check if we have a triage file for this issue
-          const triageFile = Bun.file(`results/issue-${issue.number}-triage.md`);
+          const triageFile = Bun.file(`${ctx.paths.triage}/issue-${issue.number}-triage.md`);
           if (await triageFile.exists()) {
             // Get current metadata
             const metadata = await reviewManager.getInbox("all");
@@ -402,8 +440,12 @@ program
   .option("-e, --editor <editor>", "Editor to use (zed, vim, nvim, cursor, code)")
   .action(async (issue, options) => {
     try {
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      
       const issueNumber = parseInt(issue);
-      const filePath = `results/issue-${issueNumber}-triage.md`;
+      const filePath = `${ctx.paths.triage}/issue-${issueNumber}-triage.md`;
       const file = Bun.file(filePath);
       
       if (!(await file.exists())) {
@@ -448,6 +490,98 @@ program
   });
 
 program
+  .command("project")
+  .description("Manage projects")
+  .argument("<action>", "Action: add, switch, list, remove")
+  .option("-o, --owner <owner>", "Repository owner (for 'add')")
+  .option("-r, --repo <repo>", "Repository name (for 'add')")
+  .option("-t, --token <token>", "GitHub token or env:VAR (for 'add')")
+  .option("-p, --path <path>", "Path to codebase (for 'add')")
+  .action(async (action, options) => {
+    try {
+      const { ConfigManager } = await import("./config-manager");
+      const configManager = new ConfigManager();
+
+      if (action === "add") {
+        if (!options.owner || !options.repo) {
+          console.error("❌ Please specify owner and repo");
+          console.error("Example: bun cli.ts project add -o owner -r repo -t env:GITHUB_TOKEN");
+          process.exit(1);
+        }
+
+        const projectConfig = {
+          owner: options.owner,
+          repo: options.repo,
+          token: options.token || "env:GITHUB_TOKEN",
+          codePath: options.path,
+        };
+
+        await configManager.upsertProject(projectConfig);
+        const projectId = `${options.owner}/${options.repo}`;
+        
+        if (!configManager.getActiveProject()) {
+          await configManager.setActiveProject(projectId);
+          console.log(`✅ Added and activated project: ${projectId}`);
+        } else {
+          console.log(`✅ Added project: ${projectId}`);
+          console.log(`💡 Run 'bun cli.ts project switch ${projectId}' to activate it`);
+        }
+      } else if (action === "switch") {
+        const projectId = options.owner && options.repo 
+          ? `${options.owner}/${options.repo}`
+          : undefined;
+
+        if (!projectId) {
+          console.error("❌ Please specify project in format: owner/repo");
+          console.error("Example: bun cli.ts project switch -o owner -r repo");
+          process.exit(1);
+        }
+
+        const project = configManager.getProject(projectId);
+        if (!project) {
+          console.error(`❌ Project not found: ${projectId}`);
+          console.log("\n💡 Add it first with: bun cli.ts project add -o owner -r repo -t token");
+          process.exit(1);
+        }
+
+        await configManager.setActiveProject(projectId);
+        console.log(`✅ Switched to project: ${projectId}`);
+      } else if (action === "list") {
+        const projects = configManager.listProjects();
+        const activeProject = configManager.getActiveProject();
+
+        if (projects.length === 0) {
+          console.log("No projects configured");
+          console.log("\n💡 Add one with: bun cli.ts project add -o owner -r repo -t token");
+          return;
+        }
+
+        console.log("📋 Projects:\n");
+        projects.forEach((project) => {
+          const isActive = project.id === activeProject;
+          const marker = isActive ? "✓" : " ";
+          console.log(`${marker} ${project.id}`);
+          if (project.codePath) {
+            console.log(`    Path: ${project.codePath}`);
+          }
+          console.log(`    Token: ${project.token || "Not set"}`);
+          console.log();
+        });
+      } else if (action === "remove") {
+        console.error("❌ Remove action not yet implemented");
+        process.exit(1);
+      } else {
+        console.error(`❌ Unknown action: ${action}`);
+        console.log("Available actions: add, switch, list");
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error("❌ Error:", error);
+      process.exit(1);
+    }
+  });
+
+program
   .command("config")
   .description("Manage configuration")
   .argument("<action>", "Action: show, set-editor")
@@ -462,9 +596,13 @@ program
         const { ConfigManager } = await import("./config-manager");
         const configManager = new ConfigManager();
         const githubRepo = configManager.getGitHubRepo();
+        const activeProject = configManager.getActiveProject();
+        const projects = configManager.listProjects();
         
         console.log("📝 Configuration:");
-        console.log(`\nGitHub Repo: ${githubRepo || "Not set (required for title fetching and web links)"}`);
+        console.log(`\nActive Project: ${activeProject || "None"}`);
+        console.log(`Total Projects: ${projects.length}`);
+        console.log(`\nLegacy GitHub Repo: ${githubRepo || "Not set"}`);
         console.log(`\nDefault editor: ${defaultEditor ? editorManager.getEditorName(defaultEditor) : "Not set"}`);
         console.log("\nAvailable editors:");
         availableEditors.forEach((editor) => {
@@ -501,8 +639,8 @@ program
     }
   });
 
-async function reviewIssue(issueNumber: number, reviewManager: ReviewManager): Promise<void> {
-  const triageFile = Bun.file(`results/issue-${issueNumber}-triage.md`);
+async function reviewIssue(issueNumber: number, reviewManager: ReviewManager, triagePath: string): Promise<void> {
+  const triageFile = Bun.file(`${triagePath}/issue-${issueNumber}-triage.md`);
   
   if (!(await triageFile.exists())) {
     console.error(`❌ Triage file not found for issue #${issueNumber}`);
@@ -511,13 +649,11 @@ async function reviewIssue(issueNumber: number, reviewManager: ReviewManager): P
   
   const content = await triageFile.text();
   
-  // Display the issue
   console.log(`📋 Issue #${issueNumber}`);
   console.log("-".repeat(80));
   console.log(content);
   console.log("-".repeat(80));
   
-  // Mark as read
   await reviewManager.markAsRead(issueNumber);
   console.log(`\n✅ Issue #${issueNumber} marked as read`);
 }

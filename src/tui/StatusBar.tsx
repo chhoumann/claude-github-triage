@@ -7,6 +7,7 @@ interface StatusBarProps {
   read: number;
   filter: string;
   helpVisible?: boolean;
+  currentProject?: string;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -15,6 +16,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   read,
   filter,
   helpVisible = false,
+  currentProject,
 }) => {
   return (
     <Box borderStyle="single" borderTop={true} paddingX={1}>
@@ -22,6 +24,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <Box justifyContent="space-between">
           <Box>
             <Text>
+              {currentProject && (
+                <>
+                  <Text color="magenta" bold>📁 {currentProject}</Text>
+                  <Text dimColor> | </Text>
+                </>
+              )}
               <Text color="yellow">Unread: {unread}</Text>
               <Text dimColor> | </Text>
               <Text color="gray">Read: {read}</Text>
@@ -41,7 +49,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         {!helpVisible && (
           <Box marginTop={1}>
             <Text dimColor>
-              ↑/↓ Nav | Enter Open | W Web | D Done | R/U Mark | 1-5 Status | C/K Close | / Search | ? Help
+              ↑/↓ Nav | Enter Open | W Web | D Done | R/U Mark | 1-5 Status | C/K Close | / Search | P Project | ? Help
             </Text>
           </Box>
         )}

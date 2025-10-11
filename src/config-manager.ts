@@ -1,10 +1,20 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+export interface ProjectConfig {
+  owner: string;
+  repo: string;
+  token?: string;
+  codePath?: string;
+  dataDir?: string;
+}
+
 export interface EditorConfig {
   defaultEditor?: string;
   editorPaths?: Record<string, string>;
-  githubRepo?: string; // Format: "owner/repo"
+  githubRepo?: string;
+  projects?: Record<string, ProjectConfig>;
+  activeProject?: string;
 }
 
 export class ConfigManager {
@@ -79,5 +89,44 @@ export class ConfigManager {
   async setGitHubRepo(repo: string): Promise<void> {
     this.config.githubRepo = repo;
     await this.saveConfig();
+  }
+
+  getActiveProject(): string | undefined {
+    return this.config.activeProject;
+  }
+
+  async setActiveProject(id: string): Promise<void> {
+    this.config.activeProject = id;
+    await this.saveConfig();
+  }
+
+  getProject(id: string): ProjectConfig | undefined {
+    return this.config.projects?.[id];
+  }
+
+  async upsertProject(cfg: ProjectConfig): Promise<void> {
+    if (!this.config.projects) {
+      this.config.projects = {};
+    }
+    const id = `${cfg.owner}/${cfg.repo}`;
+    this.config.projects[id] = cfg;
+    await this.saveConfig();
+  }
+
+  listProjects(): Array<ProjectConfig & { id: string }> {
+    if (!this.config.projects) return [];
+    return Object.entries(this.config.projects).map(([id, config]) => ({
+      ...config,
+      id,
+    }));
+  }
+
+  resolveToken(cfg: ProjectConfig): string | undefined {
+    if (!cfg.token) return undefined;
+    if (cfg.token.startsWith("env:")) {
+      const envVar = cfg.token.slice(4);
+      return process.env[envVar];
+    }
+    return cfg.token;
   }
 }

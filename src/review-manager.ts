@@ -20,12 +20,14 @@ export interface MetadataStore {
 }
 
 export class ReviewManager {
-  private metadataPath = "results/.triage-metadata.json";
+  private metadataPath: string;
   private metadata: MetadataStore = { issues: {} };
 
-  constructor() {
-    // Note: loadMetadata is async but constructor can't be async
-    // Must call loadMetadata() or scanForNewIssues() before using
+  constructor(
+    private projectRoot: string = "results",
+    private repoSlug?: string
+  ) {
+    this.metadataPath = `${projectRoot}/.triage-metadata.json`;
   }
 
   public async loadMetadata(): Promise<void> {
@@ -46,7 +48,13 @@ export class ReviewManager {
   }
 
   private getGitHubRepo(): { owner: string; repo: string } | null {
-    // First try config
+    if (this.repoSlug) {
+      const [owner, repo] = this.repoSlug.split("/");
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+
     const { ConfigManager } = require("./config-manager");
     const configManager = new ConfigManager();
     const configRepo = configManager.getGitHubRepo();
@@ -58,7 +66,6 @@ export class ReviewManager {
       }
     }
     
-    // Fallback to git remote
     try {
       const gitRemote = Bun.spawnSync(["git", "config", "--get", "remote.origin.url"], {
         cwd: process.cwd(),
@@ -136,17 +143,23 @@ export class ReviewManager {
   }
 
   public async scanForNewIssues(): Promise<void> {
-    // Reload metadata from disk first
     await this.loadMetadata();
     
-    const glob = new Glob("results/issue-*-triage.md");
+    const triageDir = `${this.projectRoot}/triage`;
+    const debugDir = `${this.projectRoot}/debug`;
+    
+    const fs = require('fs');
+    const triagePattern = fs.existsSync(triageDir)
+      ? `${triageDir}/issue-*-triage.md`
+      : `${this.projectRoot}/issue-*-triage.md`;
+    
+    const glob = new Glob(triagePattern);
     
     for await (const file of glob.scan()) {
       const match = file.match(/issue-(\d+)-triage\.md$/);
       if (match) {
         const issueNumber = match[1];
         
-        // Add to metadata if not already tracked
         if (!this.metadata.issues[issueNumber]) {
           const stats = await Bun.file(file).stat();
           this.metadata.issues[issueNumber] = {
@@ -156,37 +169,35 @@ export class ReviewManager {
           };
         }
         
-        // Parse triage file for metadata
         const content = await Bun.file(file).text();
         const issue = this.metadata.issues[issueNumber];
         
-        // Parse title from file (don't fetch from GitHub here - too slow)
         const titleMatch = content.match(/^#\s+Issue\s+#\d+:\s*(.+)$/m);
         if (titleMatch) {
           issue.title = titleMatch[1].trim();
         }
         
-        // Parse SHOULD_CLOSE
         const shouldCloseMatch = content.match(/SHOULD_CLOSE:\s*(Yes|No)/i);
         if (shouldCloseMatch) {
           issue.shouldClose = shouldCloseMatch[1].toLowerCase() === "yes";
         }
         
-        // Parse LABELS
         const labelsMatch = content.match(/LABELS:\s*(.+)$/m);
         if (labelsMatch) {
           const labelsStr = labelsMatch[1].trim();
           issue.labels = labelsStr ? labelsStr.split(',').map(l => l.trim()).filter(l => l) : [];
         }
         
-        // Parse CONFIDENCE
         const confidenceMatch = content.match(/CONFIDENCE:\s*(High|Medium|Low)/i);
         if (confidenceMatch) {
           issue.confidence = confidenceMatch[1];
         }
         
-        // Parse model from debug.json
-        const debugFile = Bun.file(`results/issue-${issueNumber}-triage-debug.json`);
+        const debugPath = fs.existsSync(debugDir)
+          ? `${debugDir}/issue-${issueNumber}-triage-debug.json`
+          : `${this.projectRoot}/issue-${issueNumber}-triage-debug.json`;
+        
+        const debugFile = Bun.file(debugPath);
         if (await debugFile.exists()) {
           try {
             const debugContent = await debugFile.text();

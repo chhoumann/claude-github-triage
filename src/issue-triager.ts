@@ -27,12 +27,22 @@ export class IssueTriage {
   private reviewManager: ReviewManager;
   private agentAdapter: AgentAdapter;
   private adapterName: string;
+  private triagePath: string;
+  private debugPath: string;
 
-  constructor(githubToken: string, agentAdapter: AgentAdapter, adapterName: string) {
+  constructor(
+    githubToken: string,
+    agentAdapter: AgentAdapter,
+    adapterName: string,
+    triagePath: string = "results",
+    debugPath: string = "results"
+  ) {
     this.githubClient = new GitHubClient(githubToken);
     this.reviewManager = new ReviewManager();
     this.agentAdapter = agentAdapter;
     this.adapterName = adapterName;
+    this.triagePath = triagePath;
+    this.debugPath = debugPath;
   }
 
   async triageIssue(
@@ -42,8 +52,7 @@ export class IssueTriage {
     projectPath: string,
     force = false,
   ): Promise<void> {
-    // Check if we've already triaged this issue
-    const resultPath = `results/issue-${issueNumber}-triage.md`;
+    const resultPath = `${this.triagePath}/issue-${issueNumber}-triage.md`;
     const resultFile = Bun.file(resultPath);
     
     if (!force && await resultFile.exists()) {
@@ -87,7 +96,7 @@ export class IssueTriage {
 
     if (DEBUG) {
       Bun.write(
-        `results/issue-${issueNumber}-triage-debug.json`,
+        `${this.debugPath}/issue-${issueNumber}-triage-debug.json`,
         JSON.stringify(messages, null, 2),
       );
     }
@@ -97,7 +106,7 @@ export class IssueTriage {
       lastMessage.type === "result" &&
       lastMessage.subtype === "success"
     ) {
-      await Bun.write(`results/issue-${issueNumber}-triage.md`, lastMessage.result);
+      await Bun.write(resultPath, lastMessage.result);
       // Update review metadata
       await this.reviewManager.updateTriageMetadata(issueNumber, this.adapterName);
     } else {
@@ -212,9 +221,8 @@ SUGGESTED_RESPONSE:
         break;
       }
 
-      // Check if already triaged (unless force mode)
       if (!options?.force) {
-        const resultPath = `results/issue-${issue.number}-triage.md`;
+        const resultPath = `${this.triagePath}/issue-${issue.number}-triage.md`;
         const resultFile = Bun.file(resultPath);
         if (await resultFile.exists()) {
           skippedCount++;

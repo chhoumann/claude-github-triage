@@ -33,6 +33,10 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [jumpMode, setJumpMode] = useState(false);
   const [jumpInput, setJumpInput] = useState("");
   const [lastGPress, setLastGPress] = useState<number>(0);
+  const [currentProject, setCurrentProject] = useState<string>("");
+  const [projectRoot, setProjectRoot] = useState<string>("results");
+  const [showProjectSelect, setShowProjectSelect] = useState(false);
+  const [availableProjects, setAvailableProjects] = useState<Array<{id: string, owner: string, repo: string}>>([]);
 
   useEffect(() => {
     loadIssues();
@@ -44,21 +48,31 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
   const loadIssues = async () => {
     try {
-      const reviewManager = new ReviewManager();
+      const { ProjectContext } = await import("../project-context");
+      const { ConfigManager } = await import("../config-manager");
       
-      // Quick scan - don't fetch from GitHub yet
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      await ctx.migrateLegacyIfNeeded();
+      
+      setCurrentProject(ctx.repoSlug);
+      setProjectRoot(ctx.paths.root);
+      
+      const configManager = new ConfigManager();
+      const projects = configManager.listProjects();
+      setAvailableProjects(projects);
+      
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
+      
       await reviewManager.scanForNewIssues();
       
-      // Load UI immediately with cached data
       const issuesList = await reviewManager.getInbox(filter, sort, closeFilter);
       const statsData = await reviewManager.getStats();
       setAllIssues(issuesList);
       setStats(statsData);
       setError(null);
       
-      // Fetch missing titles in background and update as they come in
       reviewManager.fetchMissingTitlesInBackground(async () => {
-        // Reload from disk to get updated titles
         await reviewManager.loadMetadata();
         const updatedIssues = await reviewManager.getInbox(filter, sort, closeFilter);
         setAllIssues(updatedIssues);
@@ -113,7 +127,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const issue = filteredIssues[selectedIndex];
     if (!issue) return;
 
-    const reviewManager = new ReviewManager();
+    const reviewManager = new ReviewManager(projectRoot, currentProject);
     await reviewManager.loadMetadata();
     await reviewManager.markAsRead(issue.issueNumber);
     await loadIssues();
@@ -124,7 +138,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const issue = filteredIssues[selectedIndex];
     if (!issue) return;
 
-    const reviewManager = new ReviewManager();
+    const reviewManager = new ReviewManager(projectRoot, currentProject);
     await reviewManager.loadMetadata();
     await reviewManager.markAsUnread(issue.issueNumber);
     await loadIssues();
@@ -135,7 +149,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const issue = filteredIssues[selectedIndex];
     if (!issue) return;
 
-    const reviewManager = new ReviewManager();
+    const reviewManager = new ReviewManager(projectRoot, currentProject);
     await reviewManager.loadMetadata();
     await reviewManager.markAsDone(issue.issueNumber, done);
     await loadIssues();
@@ -173,17 +187,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     if (!issue) return;
 
     try {
-      const filePath = `results/issue-${issue.issueNumber}-triage.md`;
+      const { ProjectContext } = await import("../project-context");
+      const ctx = await ProjectContext.resolve({});
+      const filePath = `${ctx.paths.triage}/issue-${issue.issueNumber}-triage.md`;
       const file = Bun.file(filePath);
       if (!(await file.exists())) {
         setError(`Triage file not found: ${filePath}`);
         return;
       }
 
-      const absolutePath = `${process.cwd()}/${filePath}`;
-      await editorManager.openFile(absolutePath, editorKey);
-
-      // Stay in TUI - user can press Q to quit
+      await editorManager.openFile(filePath, editorKey);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to open editor");
     }
@@ -202,14 +215,39 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     }
   };
 
+  const switchProject = async (projectId: string) => {
+    try {
+      const { ConfigManager } = await import("../config-manager");
+      const configManager = new ConfigManager();
+      await configManager.setActiveProject(projectId);
+      setShowProjectSelect(false);
+      await loadIssues();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to switch project");
+      setShowProjectSelect(false);
+    }
+  };
+
   useInput(async (input, key) => {
-    // Skip input handling in filter/jump mode - TextInput handles it
     if (filterMode || jumpMode) {
       return;
     }
 
     if (showHelp) {
       setShowHelp(false);
+      return;
+    }
+
+    if (showProjectSelect) {
+      const num = parseInt(input);
+      if (num >= 1 && num <= availableProjects.length) {
+        const project = availableProjects[num - 1];
+        if (project) {
+          await switchProject(project.id);
+        }
+      } else if (key.escape || input === "q") {
+        setShowProjectSelect(false);
+      }
       return;
     }
 
@@ -290,10 +328,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       // Filter: Should keep (uppercase K to avoid conflict with vim navigation)
       setCloseRecommendFilter(closeRecommendFilter === "keep" ? "all" : "keep");
     } else if (input === "w" || input === "W") {
-      // Open in web browser
       await openInBrowser();
+    } else if (input === "p" || input === "P") {
+      if (availableProjects.length > 1) {
+        setShowProjectSelect(true);
+      } else if (availableProjects.length === 0) {
+        setError("No projects configured. Run: bun cli.ts project add -o owner -r repo -t token");
+      } else {
+        setError("Only one project configured");
+      }
     } else if (key.escape) {
-      // Clear all filters and modes on ESC
       setFilterText("");
       setFilterMode(false);
       setJumpMode(false);
@@ -351,11 +395,36 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Box marginTop={1}>
             <Text bold>Other:</Text>
           </Box>
+          <Text>  <Text color="green">P</Text> - Switch project</Text>
           <Text>  <Text color="green">?</Text> - Show this help</Text>
           <Text>  <Text color="green">Q</Text> - Quit</Text>
         </Box>
         <Box marginTop={1}>
           <Text dimColor>Press any key to continue...</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (showProjectSelect) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">
+          Switch Project
+        </Text>
+        <Box marginTop={1} flexDirection="column">
+          {availableProjects.map((project, idx) => {
+            const isActive = project.id === currentProject;
+            return (
+              <Text key={project.id}>
+                <Text color="green">{idx + 1}</Text> - {project.id}
+                {isActive && <Text color="magenta" bold> (current)</Text>}
+              </Text>
+            );
+          })}
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>Press number to select, ESC or Q to cancel</Text>
         </Box>
       </Box>
     );
@@ -436,6 +505,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
             .filter(Boolean)
             .join(" ") || filter
         }
+        currentProject={currentProject}
       />
     </Box>
   );
