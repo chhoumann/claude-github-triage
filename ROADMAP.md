@@ -2,38 +2,17 @@
 
 This document tracks planned features and improvements for the GitHub triage system.
 
+## Recent Updates (2025)
+
+🎉 **Major Features Shipped:**
+- ✅ **Multi-Project Support** - Manage multiple repositories with separate configurations
+- ✅ **Background Triage Queue** - Non-blocking bulk operations with real-time progress
+- ✅ **Visual Selection Mode** - Select and batch-process multiple issues
+- ✅ **Toast Notifications** - Better error handling with non-blocking messages
+
+See [Completed Features](#completed-features) section below for full details.
+
 ## High Priority
-
-### Multi-Project Support
-**Problem**: Currently all data is stored in a single `results/` directory without clear project separation.
-
-**Solution**:
-- Store project-specific data in separate directories (e.g., `data/<owner>/<repo>/`)
-- Add project context/switching so you don't need to provide `-o`, `-r`, `-t` flags every time
-- Configuration file to store active project and credentials
-- Quick project switcher in TUI (e.g., `P` key to switch projects)
-- Show current project in status bar
-
-**Benefits**:
-- Work on multiple repositories simultaneously
-- Clearer organization of triage data
-- Faster CLI usage with saved context
-
-### Bulk Operations
-**Status**: Planned
-
-**Features**:
-- Visual selection mode (press `v` to enter, `Space` to toggle selection)
-- Multi-select multiple issues with visual indicators
-- Bulk actions: mark as read/done, **trigger triage workflow** (with custom parameters)
-- Show progress when running bulk triage operations
-- Auto-update rows in real-time as triage completes
-
-**Use Cases**:
-- Select 10 old issues and mark them all as done
-- Select issues needing re-triage and batch process them
-- Selecting issues triaged by older model for re-triage
-- Efficiently manage large backlogs
 
 ### Issue Notes & Custom Tags
 **Status**: Planned
@@ -67,14 +46,6 @@ This document tracks planned features and improvements for the GitHub triage sys
 - Press `s` to open sort menu
 - Quick sort presets: `6`, `7`, `8` for common sorts
 - Show current sort in status bar
-
-### GitHub Sync Improvements
-**Status**: Planned
-
-**Features**:
-- Background auto-sync every N minutes (configurable)
-- Sync indicators in TUI (syncing animation)
-- Manual sync trigger (`S` key)
 
 ### Custom Filter Presets
 **Status**: Planned
@@ -117,6 +88,7 @@ This document tracks planned features and improvements for the GitHub triage sys
 
 ## Completed Features
 
+### Core Features
 - ✅ Interactive TUI with vim navigation
 - ✅ Basic filtering (status, close recommendation)
 - ✅ Text search
@@ -124,6 +96,55 @@ This document tracks planned features and improvements for the GitHub triage sys
 - ✅ Issue metadata tracking (read/done status)
 - ✅ GitHub sync for closed issues
 - ✅ Multiple AI adapter support (Claude, Codex)
+
+### Multi-Project Support ✨ NEW
+**Implemented:** Full multi-project management system
+
+**Features:**
+- ✅ Project-specific data in separate directories (`~/.github-triage/data/<owner>/<repo>/`)
+- ✅ Project context with saved credentials and settings
+- ✅ Configuration file storing active project
+- ✅ Quick project switcher in TUI (`P` key)
+- ✅ Current project shown in status bar
+- ✅ CLI commands: `add`, `update`, `switch`, `list`, `remove`
+- ✅ No need to provide `-o`, `-r`, `-t` flags every time
+
+**Documentation:** See [PROJECT-MANAGEMENT.md](PROJECT-MANAGEMENT.md)
+
+### Bulk Operations & Background Queue ✨ NEW
+**Implemented:** Non-blocking background triage system
+
+**Features:**
+- ✅ Visual selection mode (press `V` to enter, `Space` to toggle)
+- ✅ Multi-select with indicators: `A` select all, `I` invert selection
+- ✅ Background triage queue (non-blocking, continue working while triaging)
+- ✅ Simple adapter picker (Claude/Codex) - press `T`/`t`
+- ✅ Real-time progress bar with live updates
+- ✅ Per-row status indicators (`⏳ Triaging`, `✅ Done`, `❌ Failed`)
+- ✅ Show which issues are currently triaging (e.g., `▶ 3 (#42, #56, #89)`)
+- ✅ Live timer updating every second
+- ✅ Toast notifications for warnings/errors
+- ✅ Can add more issues to queue while running
+- ✅ Always force re-triage from TUI
+
+**Use Cases:**
+- ✅ Select 10 old issues and re-triage them all at once
+- ✅ Continue navigating/filtering while triage runs in background
+- ✅ Re-triage issues that were processed by older model
+- ✅ Efficiently manage large backlogs without blocking
+
+**Documentation:** See [BACKGROUND-QUEUE-IMPLEMENTATION.md](BACKGROUND-QUEUE-IMPLEMENTATION.md)
+
+### GitHub Sync Improvements ✨ NEW
+**Implemented:** Automatic background sync with visual indicators
+
+**Features:**
+- ✅ Background auto-sync every N minutes (configurable via `GITHUB_TRIAGE_SYNC_MINUTES` env var, defaults to 10 min)
+- ✅ TUI sync indicators: animated spinner during sync, "last sync" timestamp when idle
+- ✅ Manual sync trigger with `S` key
+- ✅ Silent auto-sync (no interruptions) with toast notifications for manual syncs
+- ✅ Mutex protection prevents overlapping syncs
+- ✅ Reusable sync service shared between CLI and TUI
 
 ## Ideas / Future Exploration
 

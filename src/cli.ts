@@ -360,6 +360,7 @@ program
   .action(async (options) => {
     try {
       const { ProjectContext } = await import("./project-context");
+      const { syncClosedIssues } = await import("./sync-service");
       const ctx = await ProjectContext.resolve({
         owner: options.owner,
         repo: options.repo,
@@ -368,63 +369,19 @@ program
       
       await ctx.ensureDirs();
       
-      const githubClient = new GitHubClient(ctx.token);
-      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
-      await reviewManager.loadMetadata();
-      
       console.log(`🔄 Syncing with ${ctx.owner}/${ctx.repo}...`);
       
-      let page = 1;
-      let totalMarked = 0;
-      const alreadyMarked: number[] = [];
-      
-      while (true) {
-        const issues = await githubClient.listIssues(ctx.owner, ctx.repo, {
-          state: "closed",
-          per_page: 100,
-          page,
-        });
-        
-        if (issues.length === 0) break;
-        
-        for (const issue of issues) {
-          const triageFile = Bun.file(`${ctx.paths.triage}/issue-${issue.number}-triage.md`);
-          if (await triageFile.exists()) {
-            // Get current metadata
-            const metadata = await reviewManager.getInbox("all");
-            const issueMetadata = metadata.find(m => m.issueNumber === issue.number);
-            
-            if (issueMetadata && issueMetadata.reviewStatus === "unread") {
-              await reviewManager.markAsRead(issue.number);
-              await reviewManager.markAsDone(issue.number, true);
-              console.log(`✅ Marked issue #${issue.number} as read and done (closed)`);
-              totalMarked++;
-            } else if (issueMetadata && issueMetadata.reviewStatus === "read") {
-              // Still mark as done even if already read
-              if (!issueMetadata.isDone) {
-                await reviewManager.markAsDone(issue.number, true);
-                console.log(`✅ Marked issue #${issue.number} as done (closed, already read)`);
-                totalMarked++;
-              } else {
-                alreadyMarked.push(issue.number);
-              }
-            }
-          }
-        }
-        
-        if (issues.length < 100) break;
-        page++;
-      }
+      const result = await syncClosedIssues(ctx);
       
       console.log(`\n✨ Sync complete!`);
-      if (totalMarked > 0) {
-        console.log(`📖 Marked ${totalMarked} closed issues as read and done`);
+      if (result.updated > 0) {
+        console.log(`📖 Marked ${result.updated} closed issues as read and done`);
       }
-      if (alreadyMarked.length > 0) {
-        console.log(`✓ ${alreadyMarked.length} closed issues were already marked as read and done`);
+      if (result.alreadyMarked > 0) {
+        console.log(`✓ ${result.alreadyMarked} closed issues were already marked as read and done`);
       }
       
-      // Show updated stats
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       const stats = await reviewManager.getStats();
       console.log(`\n📊 Updated stats: ${stats.unread} unread, ${stats.read} read (${stats.total} total)`);
     } catch (error) {
@@ -492,11 +449,11 @@ program
 program
   .command("project")
   .description("Manage projects")
-  .argument("<action>", "Action: add, switch, list, remove")
-  .option("-o, --owner <owner>", "Repository owner (for 'add')")
-  .option("-r, --repo <repo>", "Repository name (for 'add')")
-  .option("-t, --token <token>", "GitHub token or env:VAR (for 'add')")
-  .option("-p, --path <path>", "Path to codebase (for 'add')")
+  .argument("<action>", "Action: add, update, switch, list, remove")
+  .option("-o, --owner <owner>", "Repository owner")
+  .option("-r, --repo <repo>", "Repository name")
+  .option("-t, --token <token>", "GitHub token or env:VAR")
+  .option("-p, --path <path>", "Path to codebase")
   .action(async (action, options) => {
     try {
       const { ConfigManager } = await import("./config-manager");
@@ -546,6 +503,39 @@ program
 
         await configManager.setActiveProject(projectId);
         console.log(`✅ Switched to project: ${projectId}`);
+      } else if (action === "update") {
+        if (!options.owner || !options.repo) {
+          console.error("❌ Please specify project to update");
+          console.error("Example: bun cli.ts project update -o owner -r repo -p /new/path");
+          process.exit(1);
+        }
+
+        const projectId = `${options.owner}/${options.repo}`;
+        const existingProject = configManager.getProject(projectId);
+
+        if (!existingProject) {
+          console.error(`❌ Project not found: ${projectId}`);
+          console.log("\n💡 Add it first with: bun cli.ts project add -o owner -r repo -t token");
+          process.exit(1);
+        }
+
+        // Merge existing config with new options
+        const updatedConfig = {
+          owner: options.owner,
+          repo: options.repo,
+          token: options.token || existingProject.token,
+          codePath: options.path || existingProject.codePath,
+        };
+
+        await configManager.upsertProject(updatedConfig);
+        console.log(`✅ Updated project: ${projectId}`);
+        
+        if (options.path) {
+          console.log(`   Path: ${options.path}`);
+        }
+        if (options.token) {
+          console.log(`   Token: ${options.token}`);
+        }
       } else if (action === "list") {
         const projects = configManager.listProjects();
         const activeProject = configManager.getActiveProject();
@@ -561,18 +551,53 @@ program
           const isActive = project.id === activeProject;
           const marker = isActive ? "✓" : " ";
           console.log(`${marker} ${project.id}`);
+          
           if (project.codePath) {
             console.log(`    Path: ${project.codePath}`);
+          } else {
+            console.log(`    Path: ⚠️  NOT SET (triage won't have codebase access!)`);
           }
+          
           console.log(`    Token: ${project.token || "Not set"}`);
+          
+          if (project.dataDir) {
+            console.log(`    Data: ${project.dataDir}`);
+          }
+          
           console.log();
         });
       } else if (action === "remove") {
-        console.error("❌ Remove action not yet implemented");
-        process.exit(1);
+        if (!options.owner || !options.repo) {
+          console.error("❌ Please specify project to remove");
+          console.error("Example: bun cli.ts project remove -o owner -r repo");
+          process.exit(1);
+        }
+
+        const projectId = `${options.owner}/${options.repo}`;
+        const existingProject = configManager.getProject(projectId);
+
+        if (!existingProject) {
+          console.error(`❌ Project not found: ${projectId}`);
+          process.exit(1);
+        }
+
+        await configManager.removeProject(projectId);
+        console.log(`✅ Removed project: ${projectId}`);
+
+        // If this was the active project, clear it
+        if (configManager.getActiveProject() === projectId) {
+          const remainingProjects = configManager.listProjects();
+          if (remainingProjects.length > 0) {
+            await configManager.setActiveProject(remainingProjects[0]!.id);
+            console.log(`💡 Switched to: ${remainingProjects[0]!.id}`);
+          } else {
+            await configManager.setActiveProject("");
+            console.log(`💡 No projects remaining`);
+          }
+        }
       } else {
         console.error(`❌ Unknown action: ${action}`);
-        console.log("Available actions: add, switch, list");
+        console.log("Available actions: add, update, switch, list, remove");
         process.exit(1);
       }
     } catch (error) {

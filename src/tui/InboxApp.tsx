@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import TextInput from "ink-text-input";
 import { TableView } from "./TableView";
 import { StatusBar } from "./StatusBar";
 import { ReviewManager, type IssueMetadata } from "../review-manager";
 import { EditorManager } from "../editor-manager";
+import { BulkTriageProgress, type BulkTriageStatus } from "./BulkTriageProgress";
+import { TriageQueue, type TriageQueueEvent } from "./TriageQueue";
+import { AdapterPicker } from "./AdapterPicker";
+import { Toast, type ToastMessage } from "./Toast";
 
 interface InboxAppProps {
   filter?: "all" | "read" | "unread";
@@ -23,7 +27,8 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [stats, setStats] = useState({ total: 0, read: 0, unread: 0 });
   const [showHelp, setShowHelp] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [fatalError, setFatalError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [editorManager] = useState(() => new EditorManager());
   const [showEditorSelect, setShowEditorSelect] = useState(false);
   const [filterMode, setFilterMode] = useState(false);
@@ -37,6 +42,23 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [projectRoot, setProjectRoot] = useState<string>("results");
   const [showProjectSelect, setShowProjectSelect] = useState(false);
   const [availableProjects, setAvailableProjects] = useState<Array<{id: string, owner: string, repo: string}>>([]);
+  
+  // Visual selection mode state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIssues, setSelectedIssues] = useState<Set<number>>(new Set());
+  
+  // Background triage queue
+  const queueRef = useRef<TriageQueue | null>(null);
+  const [showAdapterPicker, setShowAdapterPicker] = useState(false);
+  const [lastAdapter, setLastAdapter] = useState<"claude" | "codex">("claude");
+  const [bulkTriageStatus, setBulkTriageStatus] = useState<BulkTriageStatus | null>(null);
+  const [perRowStatus, setPerRowStatus] = useState<Map<number, "idle" | "queued" | "running" | "done" | "skipped" | "error">>(new Map());
+  
+  // GitHub sync state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const isSyncingRef = useRef(false);
+  const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadIssues();
@@ -45,6 +67,116 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   useEffect(() => {
     applyFilter();
   }, [allIssues, filterText, statusFilter, closeRecommendFilter]);
+
+  // Initialize triage queue when project context is available
+  useEffect(() => {
+    if (!currentProject || !projectRoot) return;
+
+    const initQueue = async () => {
+      try {
+        const { ProjectContext } = await import("../project-context");
+        const ctx = await ProjectContext.resolve({});
+        
+        // Ensure we have a codePath - this is critical for codebase access
+        if (!ctx.codePath || ctx.codePath === process.cwd()) {
+          console.warn("Warning: No codePath configured for project, triage may not have codebase access");
+        }
+        
+        const queue = new TriageQueue({
+          owner: ctx.owner,
+          repo: ctx.repo,
+          projectPath: ctx.codePath,
+          triagePath: ctx.paths.triage,
+          debugPath: ctx.paths.debug,
+          githubToken: ctx.token,
+          concurrency: 3,
+          defaultAdapter: lastAdapter,
+        });
+
+        // Wire queue events to UI state
+        queue.on("event", (event: TriageQueueEvent) => {
+          if (event.type === "queued") {
+            setPerRowStatus((prev) => new Map(prev).set(event.issueNumber, "queued"));
+            setBulkTriageStatus((prev) => {
+              const newTotal = (prev?.total || 0) + 1;
+              return prev
+                ? { ...prev, total: newTotal }
+                : { total: newTotal, completed: 0, failed: 0, skipped: 0, inFlight: 0, startTime: Date.now() };
+            });
+          } else if (event.type === "started") {
+            setPerRowStatus((prev) => new Map(prev).set(event.issueNumber, "running"));
+            setBulkTriageStatus((prev) => {
+              if (!prev) return prev;
+              const activeIssues = queueRef.current?.getActiveIssues() || [];
+              return { ...prev, inFlight: prev.inFlight + 1, activeIssues };
+            });
+          } else if (event.type === "success") {
+            setPerRowStatus((prev) => new Map(prev).set(event.issueNumber, "done"));
+            setBulkTriageStatus((prev) => {
+              if (!prev) return prev;
+              const activeIssues = queueRef.current?.getActiveIssues() || [];
+              return {
+                ...prev,
+                completed: prev.completed + 1,
+                inFlight: Math.max(0, prev.inFlight - 1),
+                activeIssues,
+              };
+            });
+            // Reload issues to get updated metadata
+            loadIssues();
+          } else if (event.type === "error") {
+            setPerRowStatus((prev) => new Map(prev).set(event.issueNumber, "error"));
+            setBulkTriageStatus((prev) => {
+              if (!prev) return prev;
+              const activeIssues = queueRef.current?.getActiveIssues() || [];
+              return {
+                ...prev,
+                failed: prev.failed + 1,
+                inFlight: Math.max(0, prev.inFlight - 1),
+                activeIssues,
+              };
+            });
+            setToast({
+              message: `Failed to triage issue #${event.issueNumber}: ${event.error}`,
+              level: "error",
+              expiresAt: Date.now() + 5000,
+            });
+          } else if (event.type === "drain") {
+            // Queue is empty
+            setBulkTriageStatus(null);
+            setPerRowStatus(new Map());
+            setToast({
+              message: "All issues triaged!",
+              level: "success",
+              expiresAt: Date.now() + 3000,
+            });
+          }
+        });
+
+        queueRef.current = queue;
+      } catch (err) {
+        console.error("Failed to initialize queue:", err);
+      }
+    };
+
+    initQueue();
+
+    return () => {
+      queueRef.current?.stop();
+      queueRef.current = null;
+    };
+  }, [currentProject, projectRoot]);
+
+  // Auto-clear expired toasts
+  useEffect(() => {
+    if (!toast || !toast.expiresAt) return;
+
+    const timeout = setTimeout(() => {
+      setToast(null);
+    }, toast.expiresAt - Date.now());
+
+    return () => clearTimeout(timeout);
+  }, [toast]);
 
   const loadIssues = async () => {
     try {
@@ -70,7 +202,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       const statsData = await reviewManager.getStats();
       setAllIssues(issuesList);
       setStats(statsData);
-      setError(null);
+      setFatalError(null);
       
       reviewManager.fetchMissingTitlesInBackground(async () => {
         await reviewManager.loadMetadata();
@@ -80,7 +212,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         console.error("Failed to fetch titles:", err);
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load issues");
+      setFatalError(err instanceof Error ? err.message : "Failed to load issues");
     }
   };
 
@@ -165,7 +297,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const repo = configManager.getGitHubRepo();
 
     if (!repo) {
-      setError("No GitHub repo configured. Run: bun run src/cli.ts config set-repo owner/repo");
+      setToast({
+        message: "No GitHub repo configured. Run: bun run src/cli.ts config set-repo owner/repo",
+        level: "error",
+        expiresAt: Date.now() + 5000,
+      });
       return;
     }
 
@@ -177,7 +313,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         "-R", repo
       ]);
     } catch (err) {
-      setError("Failed to open in browser. Is gh cli installed?");
+      setToast({
+        message: "Failed to open in browser. Is gh cli installed?",
+        level: "error",
+        expiresAt: Date.now() + 5000,
+      });
     }
   };
 
@@ -192,13 +332,21 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       const filePath = `${ctx.paths.triage}/issue-${issue.issueNumber}-triage.md`;
       const file = Bun.file(filePath);
       if (!(await file.exists())) {
-        setError(`Triage file not found: ${filePath}`);
+        setToast({
+          message: `Triage file not found: ${filePath}`,
+          level: "error",
+          expiresAt: Date.now() + 5000,
+        });
         return;
       }
 
       await editorManager.openFile(filePath, editorKey);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to open editor");
+      setToast({
+        message: err instanceof Error ? err.message : "Failed to open editor",
+        level: "error",
+        expiresAt: Date.now() + 5000,
+      });
     }
   };
 
@@ -209,7 +357,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       setJumpMode(false);
       setJumpInput("");
     } else {
-      setError(`Issue #${issueNumber} not found in current view`);
+      setToast({
+        message: `Issue #${issueNumber} not found in current view`,
+        level: "warn",
+        expiresAt: Date.now() + 4000,
+      });
       setJumpMode(false);
       setJumpInput("");
     }
@@ -223,10 +375,125 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       setShowProjectSelect(false);
       await loadIssues();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to switch project");
+      setToast({
+        message: err instanceof Error ? err.message : "Failed to switch project",
+        level: "error",
+        expiresAt: Date.now() + 5000,
+      });
       setShowProjectSelect(false);
     }
   };
+
+  const startSync = React.useCallback(async (opts?: { silent?: boolean }) => {
+    if (isSyncingRef.current) {
+      if (!opts?.silent) {
+        setToast({
+          message: "Sync already in progress",
+          level: "info",
+          expiresAt: Date.now() + 2000,
+        });
+      }
+      return;
+    }
+
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+
+    try {
+      const { ProjectContext } = await import("../project-context");
+      const { syncClosedIssues } = await import("../sync-service");
+      const ctx = await ProjectContext.resolve({});
+      
+      const result = await syncClosedIssues(ctx);
+      setLastSyncAt(Date.now());
+      
+      if (!opts?.silent) {
+        setToast({
+          message: `Synced ${result.updated} closed issue${result.updated !== 1 ? "s" : ""}`,
+          level: "success",
+          expiresAt: Date.now() + 3000,
+        });
+      }
+      
+      await loadIssues();
+    } catch (err) {
+      if (!opts?.silent) {
+        setToast({
+          message: `Sync failed: ${err instanceof Error ? err.message : String(err)}`,
+          level: "error",
+          expiresAt: Date.now() + 4000,
+        });
+      }
+    } finally {
+      isSyncingRef.current = false;
+      setIsSyncing(false);
+    }
+  }, []);
+
+  const enqueueForTriage = (adapter: "claude" | "codex") => {
+    if (!queueRef.current) {
+      setToast({
+        message: "Triage queue not initialized",
+        level: "error",
+        expiresAt: Date.now() + 5000,
+      });
+      return;
+    }
+
+    if (selectedIssues.size === 0) {
+      setToast({
+        message: "No issues selected",
+        level: "warn",
+        expiresAt: Date.now() + 3000,
+      });
+      return;
+    }
+
+    queueRef.current.setAdapter(adapter);
+    queueRef.current.enqueue(Array.from(selectedIssues));
+    setLastAdapter(adapter);
+    
+    setToast({
+      message: `Enqueued ${selectedIssues.size} issue(s) for triage with ${adapter}`,
+      level: "success",
+      expiresAt: Date.now() + 3000,
+    });
+
+    // Clear selection after enqueuing
+    setSelectedIssues(new Set());
+    setSelectionMode(false);
+  };
+
+  // Auto-sync timer
+  useEffect(() => {
+    if (!currentProject || !projectRoot) return;
+
+    const setupAutoSync = async () => {
+      try {
+        const syncIntervalMinutes = Number(process.env.GITHUB_TRIAGE_SYNC_MINUTES) || 10;
+        const intervalMs = Math.max(1, syncIntervalMinutes) * 60 * 1000;
+
+        if (syncTimerRef.current) {
+          clearInterval(syncTimerRef.current);
+        }
+
+        syncTimerRef.current = setInterval(() => {
+          startSync({ silent: true });
+        }, intervalMs);
+      } catch (err) {
+        console.error("Failed to setup auto-sync:", err);
+      }
+    };
+
+    setupAutoSync();
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearInterval(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+    };
+  }, [currentProject, projectRoot, startSync]);
 
   useInput(async (input, key) => {
     if (filterMode || jumpMode) {
@@ -235,6 +502,22 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
     if (showHelp) {
       setShowHelp(false);
+      return;
+    }
+
+    if (showAdapterPicker) {
+      if (input === "1") {
+        enqueueForTriage("claude");
+        setShowAdapterPicker(false);
+      } else if (input === "2") {
+        enqueueForTriage("codex");
+        setShowAdapterPicker(false);
+      } else if (key.return && lastAdapter) {
+        enqueueForTriage(lastAdapter);
+        setShowAdapterPicker(false);
+      } else if (key.escape || input === "q") {
+        setShowAdapterPicker(false);
+      }
       return;
     }
 
@@ -295,7 +578,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     } else if (input === "e") {
       const editors = editorManager.getAvailableEditors();
       if (editors.length === 0) {
-        setError("No editors available");
+        setToast({
+          message: "No editors available",
+          level: "error",
+          expiresAt: Date.now() + 3000,
+        });
       } else if (editors.length === 1) {
         openInEditor(editors[0]?.key);
       } else {
@@ -333,17 +620,79 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       if (availableProjects.length > 1) {
         setShowProjectSelect(true);
       } else if (availableProjects.length === 0) {
-        setError("No projects configured. Run: bun cli.ts project add -o owner -r repo -t token");
+        setToast({
+          message: "No projects configured. Run: bun cli.ts project add -o owner -r repo -t token",
+          level: "warn",
+          expiresAt: Date.now() + 5000,
+        });
       } else {
-        setError("Only one project configured");
+        setToast({
+          message: "Only one project configured",
+          level: "info",
+          expiresAt: Date.now() + 3000,
+        });
       }
+    } else if (input === "v") {
+      // Toggle visual selection mode
+      setSelectionMode((prev) => !prev);
+      if (selectionMode) {
+        // Exiting selection mode - clear selection
+        setSelectedIssues(new Set());
+      }
+    } else if (input === " " && selectionMode) {
+      // Toggle selection for current issue
+      if (filteredIssues.length === 0) return;
+      const issue = filteredIssues[selectedIndex];
+      if (!issue) return;
+      
+      setSelectedIssues((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(issue.issueNumber)) {
+          newSet.delete(issue.issueNumber);
+        } else {
+          newSet.add(issue.issueNumber);
+        }
+        return newSet;
+      });
+    } else if (input === "a" && selectionMode) {
+      // Select all in current filtered view
+      const allNumbers = new Set(filteredIssues.map((i) => i.issueNumber));
+      setSelectedIssues(allNumbers);
+    } else if (input === "i" && selectionMode) {
+      // Invert selection in current filtered view
+      setSelectedIssues((prev) => {
+        const newSet = new Set<number>();
+        for (const issue of filteredIssues) {
+          if (!prev.has(issue.issueNumber)) {
+            newSet.add(issue.issueNumber);
+          }
+        }
+        return newSet;
+      });
+    } else if (input === "t" && selectionMode && selectedIssues.size > 0) {
+      // Open adapter picker
+      setShowAdapterPicker(true);
+    } else if (input === "T" && selectionMode && selectedIssues.size > 0) {
+      // Quick re-triage with last adapter
+      enqueueForTriage(lastAdapter);
+    } else if (input === "s" || input === "S") {
+      startSync();
     } else if (key.escape) {
-      setFilterText("");
-      setFilterMode(false);
-      setJumpMode(false);
-      setJumpInput("");
-      setStatusFilter("all");
-      setCloseRecommendFilter("all");
+      if (selectionMode) {
+        // First ESC clears selection, second ESC exits selection mode
+        if (selectedIssues.size > 0) {
+          setSelectedIssues(new Set());
+        } else {
+          setSelectionMode(false);
+        }
+      } else {
+        setFilterText("");
+        setFilterMode(false);
+        setJumpMode(false);
+        setJumpInput("");
+        setStatusFilter("all");
+        setCloseRecommendFilter("all");
+      }
     } else if (input === "?") {
       setShowHelp(true);
     } else if (input === "q") {
@@ -351,10 +700,10 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     }
   });
 
-  if (error) {
+  if (fatalError) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text color="red">Error: {error}</Text>
+        <Text color="red">Fatal Error: {fatalError}</Text>
         <Text dimColor>Press Q to quit</Text>
       </Box>
     );
@@ -393,8 +742,20 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text>  <Text color="green">ESC</Text> - Clear all filters</Text>
 
           <Box marginTop={1}>
+            <Text bold>Selection Mode:</Text>
+          </Box>
+          <Text>  <Text color="green">V</Text> - Enter/exit visual selection mode</Text>
+          <Text>  <Text color="green">Space</Text> - Toggle selection (in selection mode)</Text>
+          <Text>  <Text color="green">A</Text> - Select all (in selection mode)</Text>
+          <Text>  <Text color="green">I</Text> - Invert selection (in selection mode)</Text>
+          <Text>  <Text color="green">T</Text> - Bulk triage (with parameters)</Text>
+          <Text>  <Text color="green">Shift+T</Text> - Quick bulk triage (last params)</Text>
+          <Text>  <Text color="green">ESC</Text> - Clear selection (in selection mode)</Text>
+
+          <Box marginTop={1}>
             <Text bold>Other:</Text>
           </Box>
+          <Text>  <Text color="green">S</Text> - Sync with GitHub (auto-syncs every 10min)</Text>
           <Text>  <Text color="green">P</Text> - Switch project</Text>
           <Text>  <Text color="green">?</Text> - Show this help</Text>
           <Text>  <Text color="green">Q</Text> - Quit</Text>
@@ -454,6 +815,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
   return (
     <Box flexDirection="column">
+      {toast && <Toast toast={toast} />}
+
+      {showAdapterPicker && (
+        <AdapterPicker
+          onSelect={enqueueForTriage}
+          onCancel={() => setShowAdapterPicker(false)}
+          lastAdapter={lastAdapter}
+        />
+      )}
+
       {filterMode && (
         <Box borderStyle="single" paddingX={1} marginBottom={1}>
           <Text>Filter: </Text>
@@ -490,7 +861,14 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         issues={filteredIssues}
         selectedIndex={selectedIndex}
         visibleRows={25}
+        selectionMode={selectionMode}
+        selectedIssues={selectedIssues}
+        perRowStatus={perRowStatus}
       />
+
+      {bulkTriageStatus && (
+        <BulkTriageProgress status={bulkTriageStatus} />
+      )}
 
       <StatusBar
         total={stats.total}
@@ -506,6 +884,10 @@ export const InboxApp: React.FC<InboxAppProps> = ({
             .join(" ") || filter
         }
         currentProject={currentProject}
+        selectionMode={selectionMode}
+        selectedCount={selectedIssues.size}
+        syncing={isSyncing}
+        lastSyncAt={lastSyncAt}
       />
     </Box>
   );
