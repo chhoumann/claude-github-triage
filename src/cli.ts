@@ -136,15 +136,15 @@ program
 
 program
   .command("inbox")
-  .description("View triaged issues and their review status")
+  .description("View triaged issues in interactive TUI (default) or table mode")
   .option("-f, --filter <type>", "Filter by status: all, read, unread", "all")
   .option("-s, --sort <field>", "Sort by: number, date", "number")
   .option("--close <filter>", "Filter by SHOULD_CLOSE: yes|no|unknown|not-no")
-  .option("-i, --interactive", "Interactive TUI mode")
+  .option("--table", "Use legacy table mode instead of interactive TUI")
   .action(async (options) => {
     try {
-      // Interactive TUI mode
-      if (options.interactive) {
+      // Interactive TUI mode (default)
+      if (!options.table) {
         render(
           React.createElement(InboxApp, {
             filter: options.filter as "all" | "read" | "unread",
@@ -194,7 +194,7 @@ program
       console.log("└─────────┴────────────┴───────────────────────┴────────────────────────┴──────────┘");
       
       if (stats.unread > 0) {
-        console.log(`\n💡 Tip: Use 'bun cli.ts inbox --interactive' for interactive mode`);
+        console.log(`\n💡 Tip: Run 'bun cli.ts inbox' (without --table) for interactive TUI mode`);
       }
     } catch (error) {
       console.error("❌ Error:", error);

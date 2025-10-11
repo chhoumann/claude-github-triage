@@ -36,7 +36,7 @@ bun run start test -o owner -r repo
 # Triage all open issues
 bun cli.ts triage -o owner -r repo -p /path/to/codebase
 
-# View your triage inbox
+# View your triage inbox (interactive TUI by default)
 bun cli.ts inbox
 
 # Review unread issues
@@ -85,14 +85,13 @@ bun cli.ts triage -o owner -r repo \
 
 #### `inbox` - View Triaged Issues
 ```bash
-# View all issues (table mode)
+# Interactive TUI mode (default)
 bun cli.ts inbox
 
-# Interactive TUI mode 🎉 NEW!
-bun cli.ts inbox --interactive
-bun cli.ts inbox -i  # Short form
+# Legacy table mode
+bun cli.ts inbox --table
 
-# Filter by status
+# Filter by status (works in both modes)
 bun cli.ts inbox --filter unread
 bun cli.ts inbox --filter read
 
@@ -103,26 +102,22 @@ bun cli.ts inbox --close unknown # Issues with unknown status
 bun cli.ts inbox --close not-no  # Issues that are yes or unknown (not explicitly no)
 
 # Combine filters (works in both modes)
-bun cli.ts inbox --filter unread --close yes --interactive
+bun cli.ts inbox --filter unread --close yes
 
 # Sort options
 bun cli.ts inbox --sort date
+
+# Use table mode with filters
+bun cli.ts inbox --table --filter unread
 ```
 
 **Options:**
 - `-f, --filter <type>`: Filter by status (all/read/unread, default: all)
 - `-s, --sort <field>`: Sort by field (number/date, default: number)
 - `--close <filter>`: Filter by SHOULD_CLOSE recommendation (yes/no/unknown/not-no)
-- `-i, --interactive`: Launch interactive TUI mode
+- `--table`: Use legacy table mode instead of interactive TUI
 
-**Table Mode** shows:
-- Issue number
-- Read/unread status
-- Triage date
-- Review date
-- Should close recommendation
-
-**Interactive TUI Mode** features:
+**Interactive TUI Mode** (default) features:
 - **Scrollable table view**: Fixed-size table (120 chars wide) showing all key information
 - **Instant loading**: UI loads immediately, titles fetch via single bulk API call (~1-2s)
 - **Table columns**:
@@ -138,11 +133,18 @@ bun cli.ts inbox --sort date
   - Recommendation filters: All / Should Close / Should Keep
   - Filters combine together (AND logic)
 - **Quick keyboard shortcuts**:
-  - **Navigation**: `↑/↓` Navigate | `Enter` Open | `E` Choose editor | `W` Open in browser
+  - **Navigation**: `↑/↓` or `k/j` Navigate | `gg` Top | `G` Bottom | `:` Jump to issue # | `Enter` Open | `E` Choose editor | `W` Open in browser
   - **Status**: `R` Read | `U` Unread | `D` Done | `Shift+D` Undone
-  - **Filters**: `1` All | `2` Unread | `3` Read | `4` Done | `5` Unread+NotDone | `C` Close | `K` Keep
+  - **Filters**: `1` All | `2` Unread | `3` Read | `4` Done | `5` Unread+NotDone | `Shift+C` Close | `Shift+K` Keep
   - **Search**: `/` Text search | `ESC` Clear all filters
   - **Help**: `?` Show help | `Q` Quit
+
+**Table Mode** (legacy, use `--table` flag) shows:
+- Issue number
+- Read/unread status
+- Triage date
+- Review date
+- Should close recommendation
 
 #### `review` - Review Triaged Issues
 ```bash
@@ -264,7 +266,7 @@ A typical workflow for triaging and reviewing issues:
    bun cli.ts sync -o owner -r repo
    ```
 
-### Interactive TUI Workflow 🎉 NEW!
+### Interactive TUI Workflow (Default)
 
 For a faster, more visual experience:
 
@@ -273,18 +275,20 @@ For a faster, more visual experience:
    bun cli.ts triage -o owner -r repo -p ./codebase
    ```
 
-2. **Launch Interactive Inbox**: Browse issues visually
+2. **Launch Interactive Inbox**: Browse issues visually (now the default!)
    ```bash
-   bun cli.ts inbox --interactive
+   bun cli.ts inbox
    ```
 
 3. **Navigate and Review**:
    - Scrollable table shows all issues with key metadata
-   - Use `↑/↓` to browse through the table
+   - Use `↑/↓` or `k/j` (vim-style) to browse through the table
+   - Use `gg` to jump to top, `G` to jump to bottom
+   - Use `:` to jump to a specific issue number
    - **Quick filters**:
      - Press `2` for unread, `3` for read, `4` for done, `5` for unread+not-done
-     - Press `C` to show only "should close" issues
-     - Press `K` to show only "should keep" issues
+     - Press `Shift+C` to show only "should close" issues
+     - Press `Shift+K` to show only "should keep" issues
      - Press `/` to search by text
      - Press `ESC` to clear all filters
    - Press `Enter` to open full triage in your editor

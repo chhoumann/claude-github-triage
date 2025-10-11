@@ -30,6 +30,9 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [filterText, setFilterText] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "read" | "unread" | "done" | "unread-not-done">("all");
   const [closeRecommendFilter, setCloseRecommendFilter] = useState<"all" | "close" | "keep">("all");
+  const [jumpMode, setJumpMode] = useState(false);
+  const [jumpInput, setJumpInput] = useState("");
+  const [lastGPress, setLastGPress] = useState<number>(0);
 
   useEffect(() => {
     loadIssues();
@@ -179,16 +182,29 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
       const absolutePath = `${process.cwd()}/${filePath}`;
       await editorManager.openFile(absolutePath, editorKey);
-      
+
       // Stay in TUI - user can press Q to quit
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to open editor");
     }
   };
 
+  const jumpToIssue = (issueNumber: number) => {
+    const index = filteredIssues.findIndex((issue) => issue.issueNumber === issueNumber);
+    if (index !== -1) {
+      setSelectedIndex(index);
+      setJumpMode(false);
+      setJumpInput("");
+    } else {
+      setError(`Issue #${issueNumber} not found in current view`);
+      setJumpMode(false);
+      setJumpInput("");
+    }
+  };
+
   useInput(async (input, key) => {
-    // Skip input handling in filter mode - TextInput handles it
-    if (filterMode) {
+    // Skip input handling in filter/jump mode - TextInput handles it
+    if (filterMode || jumpMode) {
       return;
     }
 
@@ -209,10 +225,25 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       return;
     }
 
-    if (key.upArrow) {
+    // Vim navigation: j/k and arrow keys
+    if (key.upArrow || input === "k") {
       setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow) {
+    } else if (key.downArrow || input === "j") {
       setSelectedIndex((prev) => Math.min(filteredIssues.length - 1, prev + 1));
+    } else if (input === "G") {
+      // Shift+G: Jump to bottom
+      setSelectedIndex(Math.max(0, filteredIssues.length - 1));
+    } else if (input === "g") {
+      // Check for "gg" (double g within 500ms)
+      const now = Date.now();
+      if (now - lastGPress < 500) {
+        // Jump to top
+        setSelectedIndex(0);
+        setLastGPress(0);
+      } else {
+        // Record first g press
+        setLastGPress(now);
+      }
     } else if (key.return) {
       openInEditor();
     } else if (input === "r") {
@@ -234,6 +265,9 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       }
     } else if (input === "/") {
       setFilterMode(true);
+    } else if (input === ":") {
+      setJumpMode(true);
+      setJumpInput("");
     } else if (input === "1") {
       // Filter: All status
       setStatusFilter("all");
@@ -249,19 +283,21 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     } else if (input === "5") {
       // Filter: Unread and not done
       setStatusFilter("unread-not-done");
-    } else if (input === "c") {
-      // Filter: Should close
+    } else if (input === "C") {
+      // Filter: Should close (uppercase C to avoid conflict with vim navigation)
       setCloseRecommendFilter(closeRecommendFilter === "close" ? "all" : "close");
-    } else if (input === "k") {
-      // Filter: Should keep
+    } else if (input === "K") {
+      // Filter: Should keep (uppercase K to avoid conflict with vim navigation)
       setCloseRecommendFilter(closeRecommendFilter === "keep" ? "all" : "keep");
     } else if (input === "w" || input === "W") {
       // Open in web browser
       await openInBrowser();
     } else if (key.escape) {
-      // Clear all filters on ESC
+      // Clear all filters and modes on ESC
       setFilterText("");
       setFilterMode(false);
+      setJumpMode(false);
+      setJumpInput("");
       setStatusFilter("all");
       setCloseRecommendFilter("all");
     } else if (input === "?") {
@@ -288,11 +324,13 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         </Text>
         <Box marginTop={1} flexDirection="column">
           <Text bold>Navigation:</Text>
-          <Text>  <Text color="green">↑/↓</Text> - Navigate through issues</Text>
+          <Text>  <Text color="green">↑/↓</Text> or <Text color="green">k/j</Text> - Navigate through issues</Text>
+          <Text>  <Text color="green">gg</Text> - Jump to top | <Text color="green">G</Text> - Jump to bottom</Text>
+          <Text>  <Text color="green">:</Text> - Jump to issue number</Text>
           <Text>  <Text color="green">Enter</Text> - Open issue in default editor</Text>
           <Text>  <Text color="green">E</Text> - Choose editor and open</Text>
           <Text>  <Text color="green">W</Text> - Open issue in web browser</Text>
-          
+
           <Box marginTop={1}>
             <Text bold>Status:</Text>
           </Box>
@@ -300,16 +338,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text>  <Text color="green">U</Text> - Mark as unread</Text>
           <Text>  <Text color="green">D</Text> - Mark as done</Text>
           <Text>  <Text color="green">Shift+D</Text> - Unmark as done</Text>
-          
+
           <Box marginTop={1}>
             <Text bold>Filters:</Text>
           </Box>
           <Text>  <Text color="green">/</Text> - Search by text</Text>
           <Text>  <Text color="green">1</Text> - All | <Text color="green">2</Text> - Unread | <Text color="green">3</Text> - Read | <Text color="green">4</Text> - Done | <Text color="green">5</Text> - Unread+NotDone</Text>
-          <Text>  <Text color="green">C</Text> - Toggle "Should Close" filter</Text>
-          <Text>  <Text color="green">K</Text> - Toggle "Should Keep" filter</Text>
+          <Text>  <Text color="green">Shift+C</Text> - Toggle "Should Close" filter</Text>
+          <Text>  <Text color="green">Shift+K</Text> - Toggle "Should Keep" filter</Text>
           <Text>  <Text color="green">ESC</Text> - Clear all filters</Text>
-          
+
           <Box marginTop={1}>
             <Text bold>Other:</Text>
           </Box>
@@ -358,13 +396,33 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text dimColor> (Enter to finish, ESC to cancel)</Text>
         </Box>
       )}
-      
+
+      {jumpMode && (
+        <Box borderStyle="single" paddingX={1} marginBottom={1}>
+          <Text>Jump to issue #</Text>
+          <TextInput
+            value={jumpInput}
+            onChange={setJumpInput}
+            onSubmit={() => {
+              const issueNum = parseInt(jumpInput);
+              if (!isNaN(issueNum)) {
+                jumpToIssue(issueNum);
+              } else {
+                setJumpMode(false);
+                setJumpInput("");
+              }
+            }}
+          />
+          <Text dimColor> (Enter to jump, ESC to cancel)</Text>
+        </Box>
+      )}
+
       <TableView
         issues={filteredIssues}
         selectedIndex={selectedIndex}
         visibleRows={25}
       />
-      
+
       <StatusBar
         total={stats.total}
         unread={stats.unread}
