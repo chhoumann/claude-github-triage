@@ -33,8 +33,9 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [showEditorSelect, setShowEditorSelect] = useState(false);
   const [filterMode, setFilterMode] = useState(false);
   const [filterText, setFilterText] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "read" | "unread" | "done" | "unread-not-done">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "read" | "unread">("all");
   const [closeRecommendFilter, setCloseRecommendFilter] = useState<"all" | "close" | "keep">("all");
+  const [githubClosedFilter, setGithubClosedFilter] = useState<"all" | "open" | "closed">("all");
   const [jumpMode, setJumpMode] = useState(false);
   const [jumpInput, setJumpInput] = useState("");
   const [lastGPress, setLastGPress] = useState<number>(0);
@@ -70,7 +71,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
   useEffect(() => {
     applyFilter();
-  }, [allIssues, filterText, statusFilter, closeRecommendFilter, sortDirection]);
+  }, [allIssues, filterText, statusFilter, closeRecommendFilter, githubClosedFilter, sortDirection]);
 
   // Reload issues when sort changes
   useEffect(() => {
@@ -248,10 +249,6 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       filtered = filtered.filter((i) => i.reviewStatus === "read");
     } else if (statusFilter === "unread") {
       filtered = filtered.filter((i) => i.reviewStatus === "unread");
-    } else if (statusFilter === "done") {
-      filtered = filtered.filter((i) => i.isDone === true);
-    } else if (statusFilter === "unread-not-done") {
-      filtered = filtered.filter((i) => i.reviewStatus === "unread" && i.isDone !== true);
     }
 
     // Apply close recommendation filter
@@ -259,6 +256,13 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       filtered = filtered.filter((i) => i.shouldClose === true);
     } else if (closeRecommendFilter === "keep") {
       filtered = filtered.filter((i) => i.shouldClose === false);
+    }
+
+    // Apply GitHub closed filter
+    if (githubClosedFilter === "open") {
+      filtered = filtered.filter((i) => !i.closedOnGitHub);
+    } else if (githubClosedFilter === "closed") {
+      filtered = filtered.filter((i) => i.closedOnGitHub === true);
     }
 
     // Apply sort direction (reverse if ascending)
@@ -289,17 +293,6 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const reviewManager = new ReviewManager(projectRoot, currentProject);
     await reviewManager.loadMetadata();
     await reviewManager.markAsUnread(issue.issueNumber);
-    await loadIssues();
-  };
-
-  const markAsDone = async (done: boolean = true) => {
-    if (filteredIssues.length === 0) return;
-    const issue = filteredIssues[selectedIndex];
-    if (!issue) return;
-
-    const reviewManager = new ReviewManager(projectRoot, currentProject);
-    await reviewManager.loadMetadata();
-    await reviewManager.markAsDone(issue.issueNumber, done);
     await loadIssues();
   };
 
@@ -587,10 +580,6 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       markAsRead();
     } else if (input === "u") {
       markAsUnread();
-    } else if (input === "d") {
-      markAsDone(true);
-    } else if (input === "D") {
-      markAsDone(false); // Unmark as done
     } else if (input === "e") {
       const editors = editorManager.getAvailableEditors();
       if (editors.length === 0) {
@@ -618,12 +607,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     } else if (input === "3") {
       // Filter: Read only
       setStatusFilter("read");
-    } else if (input === "4") {
-      // Filter: Done only
-      setStatusFilter("done");
-    } else if (input === "5") {
-      // Filter: Unread and not done
-      setStatusFilter("unread-not-done");
+    } else if (input === "c") {
+      // Filter: Toggle GitHub closed/open
+      const nextFilter = githubClosedFilter === "all" ? "open" : githubClosedFilter === "open" ? "closed" : "all";
+      setGithubClosedFilter(nextFilter);
+      const filterLabels = { all: "All", open: "Open on GitHub", closed: "Closed on GitHub" };
+      setToast({
+        message: `GitHub filter: ${filterLabels[nextFilter]}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
     } else if (input === "C") {
       // Filter: Should close (uppercase C to avoid conflict with vim navigation)
       setCloseRecommendFilter(closeRecommendFilter === "close" ? "all" : "close");
@@ -735,6 +728,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         setJumpInput("");
         setStatusFilter("all");
         setCloseRecommendFilter("all");
+        setGithubClosedFilter("all");
       }
     } else if (input === "?") {
       setShowHelp(true);
@@ -772,14 +766,13 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           </Box>
           <Text>  <Text color="green">R</Text> - Mark as read</Text>
           <Text>  <Text color="green">U</Text> - Mark as unread</Text>
-          <Text>  <Text color="green">D</Text> - Mark as done</Text>
-          <Text>  <Text color="green">Shift+D</Text> - Unmark as done</Text>
 
           <Box marginTop={1}>
             <Text bold>Filters:</Text>
           </Box>
           <Text>  <Text color="green">/</Text> - Search by text</Text>
-          <Text>  <Text color="green">1</Text> - All | <Text color="green">2</Text> - Unread | <Text color="green">3</Text> - Read | <Text color="green">4</Text> - Done | <Text color="green">5</Text> - Unread+NotDone</Text>
+          <Text>  <Text color="green">1</Text> - All | <Text color="green">2</Text> - Unread | <Text color="green">3</Text> - Read</Text>
+          <Text>  <Text color="green">c</Text> - Cycle GitHub status (all/open/closed)</Text>
           <Text>  <Text color="green">Shift+C</Text> - Toggle "Should Close" filter</Text>
           <Text>  <Text color="green">Shift+K</Text> - Toggle "Should Keep" filter</Text>
           <Text>  <Text color="green">ESC</Text> - Clear all filters</Text>
@@ -928,6 +921,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
             filterText && `search:"${filterText}"`,
             statusFilter !== "all" && `status:${statusFilter.replace("-", " ")}`,
             closeRecommendFilter !== "all" && `recommend:${closeRecommendFilter}`,
+            githubClosedFilter !== "all" && `github:${githubClosedFilter}`,
           ]
             .filter(Boolean)
             .join(" ") || filter

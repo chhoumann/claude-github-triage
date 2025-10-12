@@ -8,7 +8,7 @@ export interface IssueMetadata {
   tags?: string[];
   notes?: string;
   shouldClose?: boolean;
-  isDone?: boolean;
+  closedOnGitHub?: boolean;
   title?: string;
   labels?: string[];
   confidence?: string;
@@ -274,18 +274,110 @@ export class ReviewManager {
     await this.saveMetadata();
   }
 
-  async markAsDone(issueNumber: number, done: boolean = true): Promise<void> {
+  async markClosedOnGitHub(issueNumber: number, closed: boolean = true): Promise<void> {
     await this.scanForNewIssues();
 
     const issue = this.metadata.issues[issueNumber.toString()];
     if (issue) {
-      if (done) {
-        issue.isDone = true;
-      } else {
-        issue.isDone = false;
-      }
+      issue.closedOnGitHub = closed;
       await this.saveMetadata();
     }
+  }
+
+  async migrateStatusFields(githubToken: string): Promise<{
+    totalIssues: number;
+    closedOnGitHub: number;
+    openOnGitHub: number;
+    removedIsDone: number;
+    notFoundOnGitHub: number;
+  }> {
+    await this.loadMetadata();
+
+    const repoInfo = this.getGitHubRepo();
+    if (!repoInfo) {
+      throw new Error("Could not determine GitHub repository. Please configure it first.");
+    }
+
+    const { owner, repo } = repoInfo;
+    const { GitHubClient } = await import("./github");
+    const githubClient = new GitHubClient(githubToken);
+
+    // Fetch all issues from GitHub (both open and closed)
+    const githubIssuesMap = new Map<number, "open" | "closed">();
+
+    // Fetch open issues
+    let page = 1;
+    while (true) {
+      const openIssues = await githubClient.listIssues(owner, repo, {
+        state: "open",
+        per_page: 100,
+        page,
+      });
+      if (openIssues.length === 0) break;
+      for (const issue of openIssues) {
+        githubIssuesMap.set(issue.number, "open");
+      }
+      if (openIssues.length < 100) break;
+      page++;
+    }
+
+    // Fetch closed issues
+    page = 1;
+    while (true) {
+      const closedIssues = await githubClient.listIssues(owner, repo, {
+        state: "closed",
+        per_page: 100,
+        page,
+      });
+      if (closedIssues.length === 0) break;
+      for (const issue of closedIssues) {
+        githubIssuesMap.set(issue.number, "closed");
+      }
+      if (closedIssues.length < 100) break;
+      page++;
+    }
+
+    let closedCount = 0;
+    let openCount = 0;
+    let removedIsDoneCount = 0;
+    let notFoundCount = 0;
+
+    // Update all issues in our metadata
+    for (const [issueId, issue] of Object.entries(this.metadata.issues)) {
+      const issueNumber = parseInt(issueId);
+      const githubState = githubIssuesMap.get(issueNumber);
+
+      if (!githubState) {
+        notFoundCount++;
+        continue;
+      }
+
+      // Remove isDone field if it exists
+      const hadIsDone = "isDone" in issue;
+      if (hadIsDone) {
+        delete (issue as any).isDone;
+        removedIsDoneCount++;
+      }
+
+      // Set closedOnGitHub based on actual GitHub state
+      if (githubState === "closed") {
+        issue.closedOnGitHub = true;
+        closedCount++;
+      } else {
+        issue.closedOnGitHub = false;
+        openCount++;
+      }
+    }
+
+    await this.saveMetadata();
+
+    return {
+      totalIssues: Object.keys(this.metadata.issues).length,
+      closedOnGitHub: closedCount,
+      openOnGitHub: openCount,
+      removedIsDone: removedIsDoneCount,
+      notFoundOnGitHub: notFoundCount,
+    };
   }
 
   async getInbox(

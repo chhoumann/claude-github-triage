@@ -294,28 +294,26 @@ program
 
 program
   .command("mark")
-  .description("Mark issues as read/unread/done")
+  .description("Mark issues as read/unread")
   .argument("[issue]", "Issue number to mark (or use --all)")
   .option("-r, --read", "Mark as read")
   .option("-u, --unread", "Mark as unread")
-  .option("-d, --done", "Mark as done")
-  .option("-D, --not-done", "Mark as not done")
   .option("-a, --all", "Mark all issues")
   .action(async (issue, options) => {
     try {
       const { ProjectContext } = await import("./project-context");
       const ctx = await ProjectContext.resolve({});
       await ctx.ensureDirs();
-      
+
       const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.loadMetadata();
-      
-      const hasAction = options.read || options.unread || options.done || options.notDone;
+
+      const hasAction = options.read || options.unread;
       if (!hasAction) {
-        console.error("❌ Please specify --read, --unread, --done, or --not-done");
+        console.error("❌ Please specify --read or --unread");
         process.exit(1);
       }
-      
+
       if (options.all) {
         if (options.read) {
           await reviewManager.markAllAsRead();
@@ -331,12 +329,6 @@ program
         } else if (options.unread) {
           await reviewManager.markAsUnread(issueNumber);
           console.log(`✅ Issue #${issueNumber} marked as unread`);
-        } else if (options.done) {
-          await reviewManager.markAsDone(issueNumber, true);
-          console.log(`✅ Issue #${issueNumber} marked as done`);
-        } else if (options.notDone) {
-          await reviewManager.markAsDone(issueNumber, false);
-          console.log(`✅ Issue #${issueNumber} marked as not done`);
         }
       } else {
         console.error("❌ Please specify an issue number or use --all");
@@ -350,7 +342,7 @@ program
 
 program
   .command("sync")
-  .description("Sync with GitHub - mark closed issues as read and done")
+  .description("Sync with GitHub - mark closed issues as read and track their GitHub status")
   .option("-o, --owner <owner>", "Repository owner")
   .option("-r, --repo <repo>", "Repository name")
   .option(
@@ -366,24 +358,69 @@ program
         repo: options.repo,
         token: options.token,
       });
-      
+
       await ctx.ensureDirs();
-      
+
       console.log(`🔄 Syncing with ${ctx.owner}/${ctx.repo}...`);
-      
+
       const result = await syncClosedIssues(ctx);
-      
+
       console.log(`\n✨ Sync complete!`);
       if (result.updated > 0) {
-        console.log(`📖 Marked ${result.updated} closed issues as read and done`);
+        console.log(`📖 Marked ${result.updated} closed issues as read and closed on GitHub`);
       }
       if (result.alreadyMarked > 0) {
-        console.log(`✓ ${result.alreadyMarked} closed issues were already marked as read and done`);
+        console.log(`✓ ${result.alreadyMarked} closed issues were already marked`);
       }
-      
+
       const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       const stats = await reviewManager.getStats();
       console.log(`\n📊 Updated stats: ${stats.unread} unread, ${stats.read} read (${stats.total} total)`);
+    } catch (error) {
+      console.error("❌ Error:", error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("migrate")
+  .description("Migrate status fields - sync with GitHub and remove legacy isDone field")
+  .option("-o, --owner <owner>", "Repository owner")
+  .option("-r, --repo <repo>", "Repository name")
+  .option(
+    "-t, --token <token>",
+    "GitHub personal access token",
+  )
+  .action(async (options) => {
+    try {
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({
+        owner: options.owner,
+        repo: options.repo,
+        token: options.token,
+      });
+
+      await ctx.ensureDirs();
+
+      console.log(`🔄 Migrating status fields for ${ctx.owner}/${ctx.repo}...`);
+      console.log(`📡 Fetching GitHub issue states...\n`);
+
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
+      const result = await reviewManager.migrateStatusFields(ctx.token);
+
+      console.log(`\n✨ Migration complete!`);
+      console.log(`📊 Summary:`);
+      console.log(`  Total issues: ${result.totalIssues}`);
+      console.log(`  🔒 Closed on GitHub: ${result.closedOnGitHub}`);
+      console.log(`  ✅ Open on GitHub: ${result.openOnGitHub}`);
+      console.log(`  🧹 Removed isDone field: ${result.removedIsDone}`);
+      if (result.notFoundOnGitHub > 0) {
+        console.log(`  ⚠️  Not found on GitHub: ${result.notFoundOnGitHub}`);
+      }
+
+      console.log(`\n💡 Your status model is now simpler:`);
+      console.log(`   - Unread/Read: Your review status`);
+      console.log(`   - 🔒: Closed on GitHub (auto-synced)`);
     } catch (error) {
       console.error("❌ Error:", error);
       process.exit(1);

@@ -50,7 +50,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({ issue }) => {
             ) : (
               <Text color="gray">Read</Text>
             )}
-            {issue.isDone && <Text color="green"> ✓ Done</Text>}
+            {issue.closedOnGitHub && <Text color="gray"> 🔒 Closed</Text>}
           </Box>
 
           {issue.shouldClose !== undefined && (

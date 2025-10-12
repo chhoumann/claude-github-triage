@@ -21,7 +21,6 @@ export const IssueList: React.FC<IssueListProps> = ({
         {issues.map((issue, index) => {
           const isSelected = index === selectedIndex;
           const isUnread = issue.reviewStatus === "unread";
-          const isDone = issue.isDone === true;
 
           return (
             <Box key={issue.issueNumber}>
@@ -32,7 +31,7 @@ export const IssueList: React.FC<IssueListProps> = ({
               >
                 {isSelected ? "▶ " : "  "}
                 {isUnread ? "📄" : "✅"} #{issue.issueNumber}
-                {isDone && " ✓"}
+                {issue.closedOnGitHub && " 🔒"}
                 {issue.shouldClose === true && " 🔴"}
               </Text>
             </Box>

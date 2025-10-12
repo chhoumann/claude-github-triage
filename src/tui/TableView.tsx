@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { IssueMetadata } from "../review-manager";
 import { formatRelativeTime } from "./dateUtils";
 
@@ -20,13 +20,21 @@ export const TableView: React.FC<TableViewProps> = ({
   selectedIssues = new Set(),
   perRowStatus = new Map(),
 }) => {
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 120;
+
   // Calculate scroll offset to keep selected item visible
   const scrollOffset = Math.max(
     0,
     Math.min(selectedIndex - Math.floor(visibleRows / 2), issues.length - visibleRows)
   );
-  
+
   const visibleIssues = issues.slice(scrollOffset, scrollOffset + visibleRows);
+
+  // Calculate dynamic title width based on terminal width
+  // Fixed widths: checkbox(4) + issue#(7) + status(14) + recommend(11) + triaged(10) + created(10) + activity(10) + model(15) = 81
+  const fixedWidth = (selectionMode ? 4 : 0) + 7 + 14 + 11 + 10 + 10 + 10 + 15;
+  const titleWidth = Math.max(30, terminalWidth - fixedWidth - 4); // -4 for spacing and margins
   
   const formatStatus = (issue: IssueMetadata, rowStatus?: string): string => {
     // Show bulk triage status if running
@@ -34,11 +42,11 @@ export const TableView: React.FC<TableViewProps> = ({
     if (rowStatus === "done") return "✅ Done";
     if (rowStatus === "error") return "❌ Failed";
     if (rowStatus === "skipped") return "⏭ Skipped";
-    
+
     const parts: string[] = [];
     if (issue.reviewStatus === "unread") parts.push("Unread");
     else parts.push("Read");
-    if (issue.isDone) parts.push("✓Done");
+    if (issue.closedOnGitHub) parts.push("🔒");
     return parts.join(" ");
   };
 
@@ -75,11 +83,11 @@ export const TableView: React.FC<TableViewProps> = ({
       <Box>
         <Text bold dimColor>
           {selectionMode ? "[ ] ".padEnd(4) : ""}
-          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(selectionMode ? 30 : 34)} {"Recommend".padEnd(11)} {"Triaged".padEnd(10)} {"Created".padEnd(10)} {"Activity".padEnd(10)} {"Model".padEnd(15)}
+          {"#".padEnd(7)} {"Status".padEnd(14)} {"Title".padEnd(titleWidth)} {"Recommend".padEnd(11)} {"Triaged".padEnd(10)} {"Created".padEnd(10)} {"Activity".padEnd(10)} {"Model".padEnd(15)}
         </Text>
       </Box>
       <Box>
-        <Text dimColor>{"─".repeat(selectionMode ? 124 : 120)}</Text>
+        <Text dimColor>{"─".repeat(Math.min(terminalWidth - 2, fixedWidth + titleWidth))}</Text>
       </Box>
 
       {/* Rows */}
@@ -99,7 +107,7 @@ export const TableView: React.FC<TableViewProps> = ({
               {isSelected ? "▶ " : "  "}
               {`#${issue.issueNumber}`.padEnd(7)}
               {formatStatus(issue, rowStatus).padEnd(14)}
-              {truncate(issue.title, selectionMode ? 30 : 34)}
+              {truncate(issue.title, titleWidth)}
               {formatRecommendation(issue).padEnd(11)}
               {formatRelativeTime(issue.triageDate).padEnd(10)}
               {formatRelativeTime(issue.createdAt).padEnd(10)}

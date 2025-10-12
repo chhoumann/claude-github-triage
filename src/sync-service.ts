@@ -36,11 +36,11 @@ export async function syncClosedIssues(ctx: ProjectContext): Promise<SyncResult>
 
         if (issueMetadata && issueMetadata.reviewStatus === "unread") {
           await reviewManager.markAsRead(issue.number);
-          await reviewManager.markAsDone(issue.number, true);
+          await reviewManager.markClosedOnGitHub(issue.number, true);
           updated++;
         } else if (issueMetadata && issueMetadata.reviewStatus === "read") {
-          if (!issueMetadata.isDone) {
-            await reviewManager.markAsDone(issue.number, true);
+          if (!issueMetadata.closedOnGitHub) {
+            await reviewManager.markClosedOnGitHub(issue.number, true);
             updated++;
           } else {
             alreadyMarked.push(issue.number);
