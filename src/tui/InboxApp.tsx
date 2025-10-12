@@ -36,6 +36,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   const [statusFilter, setStatusFilter] = useState<"all" | "read" | "unread">("all");
   const [closeRecommendFilter, setCloseRecommendFilter] = useState<"all" | "close" | "keep">("all");
   const [githubClosedFilter, setGithubClosedFilter] = useState<"all" | "open" | "closed">("all");
+  const [modelFilter, setModelFilter] = useState<string>("all");
   const [jumpMode, setJumpMode] = useState(false);
   const [jumpInput, setJumpInput] = useState("");
   const [lastGPress, setLastGPress] = useState<number>(0);
@@ -47,6 +48,9 @@ export const InboxApp: React.FC<InboxAppProps> = ({
   // Sorting state
   const [sortField, setSortField] = useState<"number" | "triage-date" | "created" | "activity">("number");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  
+  // Preset state
+  const [activePreset, setActivePreset] = useState<number | null>(null);
   
   // Visual selection mode state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -71,7 +75,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
 
   useEffect(() => {
     applyFilter();
-  }, [allIssues, filterText, statusFilter, closeRecommendFilter, githubClosedFilter, sortDirection]);
+  }, [allIssues, filterText, statusFilter, closeRecommendFilter, githubClosedFilter, modelFilter, sortDirection]);
 
   // Reload issues when sort changes
   useEffect(() => {
@@ -228,6 +232,13 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     }
   };
 
+  const handleFilterTextChange = (text: string) => {
+    setFilterText(text);
+    if (text !== "") {
+      setActivePreset(null);
+    }
+  };
+
   const applyFilter = () => {
     let filtered = [...allIssues];
 
@@ -263,6 +274,11 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       filtered = filtered.filter((i) => !i.closedOnGitHub);
     } else if (githubClosedFilter === "closed") {
       filtered = filtered.filter((i) => i.closedOnGitHub === true);
+    }
+
+    // Apply model filter
+    if (modelFilter !== "all") {
+      filtered = filtered.filter((i) => i.model === modelFilter);
     }
 
     // Apply sort direction (reverse if ascending)
@@ -473,6 +489,129 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     setSelectionMode(false);
   };
 
+  // Filter presets
+  const applyPreset = (presetNumber: number) => {
+    const presets: Record<number, {
+      name: string;
+      statusFilter: "all" | "read" | "unread";
+      closeRecommendFilter: "all" | "close" | "keep";
+      githubClosedFilter: "all" | "open" | "closed";
+      modelFilter: string;
+      sortField: "number" | "triage-date" | "created" | "activity";
+      sortDirection: "asc" | "desc";
+      filterText: string;
+    }> = {
+      1: {
+        name: "Inbox",
+        statusFilter: "unread",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "activity",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      2: {
+        name: "To Close",
+        statusFilter: "all",
+        closeRecommendFilter: "close",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "triage-date",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      3: {
+        name: "To Keep",
+        statusFilter: "all",
+        closeRecommendFilter: "keep",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "activity",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      4: {
+        name: "Recently Triaged",
+        statusFilter: "all",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "all",
+        modelFilter: "all",
+        sortField: "triage-date",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      5: {
+        name: "Needs Review",
+        statusFilter: "unread",
+        closeRecommendFilter: "keep",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "created",
+        sortDirection: "asc",
+        filterText: "",
+      },
+      6: {
+        name: "Closed on GitHub",
+        statusFilter: "all",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "closed",
+        modelFilter: "all",
+        sortField: "activity",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      7: {
+        name: "Oldest First",
+        statusFilter: "all",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "created",
+        sortDirection: "asc",
+        filterText: "",
+      },
+      8: {
+        name: "Hot Issues",
+        statusFilter: "all",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "open",
+        modelFilter: "all",
+        sortField: "activity",
+        sortDirection: "desc",
+        filterText: "",
+      },
+      9: {
+        name: "Clear All",
+        statusFilter: "all",
+        closeRecommendFilter: "all",
+        githubClosedFilter: "all",
+        modelFilter: "all",
+        sortField: "number",
+        sortDirection: "desc",
+        filterText: "",
+      },
+    };
+
+    const preset = presets[presetNumber];
+    if (!preset) return;
+
+    setStatusFilter(preset.statusFilter);
+    setCloseRecommendFilter(preset.closeRecommendFilter);
+    setGithubClosedFilter(preset.githubClosedFilter);
+    setModelFilter(preset.modelFilter);
+    setSortField(preset.sortField);
+    setSortDirection(preset.sortDirection);
+    setFilterText(preset.filterText);
+    setActivePreset(presetNumber);
+
+    setToast({
+      message: `Preset ${presetNumber}: ${preset.name}`,
+      level: "info",
+      expiresAt: Date.now() + 2000,
+    });
+  };
+
   // Auto-sync timer
   useEffect(() => {
     if (!currentProject || !projectRoot) return;
@@ -598,31 +737,59 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     } else if (input === ":") {
       setJumpMode(true);
       setJumpInput("");
-    } else if (input === "1") {
-      // Filter: All status
-      setStatusFilter("all");
-    } else if (input === "2") {
-      // Filter: Unread only
-      setStatusFilter("unread");
-    } else if (input === "3") {
-      // Filter: Read only
-      setStatusFilter("read");
+    } else if (input >= "1" && input <= "9") {
+      // Apply preset
+      applyPreset(parseInt(input));
+    } else if (input === "r") {
+      // Toggle status filter: all -> unread -> read -> all
+      const nextStatus = statusFilter === "all" ? "unread" : statusFilter === "unread" ? "read" : "all";
+      setStatusFilter(nextStatus);
+      setActivePreset(null);
+      const statusLabels = { all: "All", unread: "Unread", read: "Read" };
+      setToast({
+        message: `Status: ${statusLabels[nextStatus]}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
     } else if (input === "c") {
       // Filter: Toggle GitHub closed/open
       const nextFilter = githubClosedFilter === "all" ? "open" : githubClosedFilter === "open" ? "closed" : "all";
       setGithubClosedFilter(nextFilter);
+      setActivePreset(null);
       const filterLabels = { all: "All", open: "Open on GitHub", closed: "Closed on GitHub" };
       setToast({
         message: `GitHub filter: ${filterLabels[nextFilter]}`,
         level: "info",
         expiresAt: Date.now() + 2000,
       });
-    } else if (input === "C") {
-      // Filter: Should close (uppercase C to avoid conflict with vim navigation)
-      setCloseRecommendFilter(closeRecommendFilter === "close" ? "all" : "close");
-    } else if (input === "K") {
-      // Filter: Should keep (uppercase K to avoid conflict with vim navigation)
-      setCloseRecommendFilter(closeRecommendFilter === "keep" ? "all" : "keep");
+    } else if (input === "x") {
+      // Filter: Cycle close recommendation (all → close → keep → all)
+      const cycle: Array<"all" | "close" | "keep"> = ["all", "close", "keep"];
+      const currentIndex = cycle.indexOf(closeRecommendFilter);
+      const nextIndex = (currentIndex + 1) % cycle.length;
+      const nextFilter = cycle[nextIndex]!;
+      setCloseRecommendFilter(nextFilter);
+      setActivePreset(null);
+
+      const filterLabels = { all: "All", close: "Should Close", keep: "Should Keep" };
+      setToast({
+        message: `Close recommendation: ${filterLabels[nextFilter]}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
+    } else if (input === "m") {
+      // Filter: Cycle through models
+      const uniqueModels = ["all", ...new Set(allIssues.map((i) => i.model).filter(Boolean) as string[])].sort();
+      const currentIndex = uniqueModels.indexOf(modelFilter);
+      const nextIndex = (currentIndex + 1) % uniqueModels.length;
+      const nextModel = uniqueModels[nextIndex]!;
+      setModelFilter(nextModel);
+      setActivePreset(null);
+      setToast({
+        message: `Model filter: ${nextModel === "all" ? "All" : nextModel}`,
+        level: "info",
+        expiresAt: Date.now() + 2000,
+      });
     } else if (input === "w" || input === "W") {
       await openInBrowser();
     } else if (input === "p" || input === "P") {
@@ -692,6 +859,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
       const currentIndex = sortOptions.indexOf(sortField);
       const nextIndex = (currentIndex + 1) % sortOptions.length;
       setSortField(sortOptions[nextIndex]!);
+      setActivePreset(null);
 
       const sortNames = {
         "number": "Issue #",
@@ -708,6 +876,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     } else if (input === "O") {
       // Reverse sort direction
       setSortDirection((prev) => prev === "asc" ? "desc" : "asc");
+      setActivePreset(null);
       setToast({
         message: `Sort direction: ${sortDirection === "asc" ? "Descending" : "Ascending"}`,
         level: "info",
@@ -729,6 +898,8 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         setStatusFilter("all");
         setCloseRecommendFilter("all");
         setGithubClosedFilter("all");
+        setModelFilter("all");
+        setActivePreset(null);
       }
     } else if (input === "?") {
       setShowHelp(true);
@@ -768,13 +939,26 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text>  <Text color="green">U</Text> - Mark as unread</Text>
 
           <Box marginTop={1}>
-            <Text bold>Filters:</Text>
+            <Text bold>Filter Presets:</Text>
+          </Box>
+          <Text>  <Text color="green">1</Text> - Inbox (unread, open)</Text>
+          <Text>  <Text color="green">2</Text> - To Close (recommended closures)</Text>
+          <Text>  <Text color="green">3</Text> - To Keep (recommended keepers)</Text>
+          <Text>  <Text color="green">4</Text> - Recently Triaged</Text>
+          <Text>  <Text color="green">5</Text> - Needs Review (unread keepers)</Text>
+          <Text>  <Text color="green">6</Text> - Closed on GitHub</Text>
+          <Text>  <Text color="green">7</Text> - Oldest First (stale issues)</Text>
+          <Text>  <Text color="green">8</Text> - Hot Issues (recent activity)</Text>
+          <Text>  <Text color="green">9</Text> - Clear All (reset)</Text>
+
+          <Box marginTop={1}>
+            <Text bold>Manual Filters:</Text>
           </Box>
           <Text>  <Text color="green">/</Text> - Search by text</Text>
-          <Text>  <Text color="green">1</Text> - All | <Text color="green">2</Text> - Unread | <Text color="green">3</Text> - Read</Text>
+          <Text>  <Text color="green">r</Text> - Cycle status (all/unread/read)</Text>
           <Text>  <Text color="green">c</Text> - Cycle GitHub status (all/open/closed)</Text>
-          <Text>  <Text color="green">Shift+C</Text> - Toggle "Should Close" filter</Text>
-          <Text>  <Text color="green">Shift+K</Text> - Toggle "Should Keep" filter</Text>
+          <Text>  <Text color="green">x</Text> - Cycle close recommendation (all/close/keep)</Text>
+          <Text>  <Text color="green">m</Text> - Cycle model filter (all/claude/codex/sonnet-4-5/etc)</Text>
           <Text>  <Text color="green">ESC</Text> - Clear all filters</Text>
 
           <Box marginTop={1}>
@@ -872,7 +1056,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           <Text>Filter: </Text>
           <TextInput
             value={filterText}
-            onChange={setFilterText}
+            onChange={handleFilterTextChange}
             onSubmit={() => setFilterMode(false)}
           />
           <Text dimColor> (Enter to finish, ESC to cancel)</Text>
@@ -922,6 +1106,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
             statusFilter !== "all" && `status:${statusFilter.replace("-", " ")}`,
             closeRecommendFilter !== "all" && `recommend:${closeRecommendFilter}`,
             githubClosedFilter !== "all" && `github:${githubClosedFilter}`,
+            modelFilter !== "all" && `model:${modelFilter}`,
           ]
             .filter(Boolean)
             .join(" ") || filter
@@ -933,6 +1118,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         lastSyncAt={lastSyncAt}
         sortField={sortField}
         sortDirection={sortDirection}
+        activePreset={activePreset}
       />
     </Box>
   );

@@ -37,6 +37,7 @@ interface StatusBarProps {
   lastSyncAt?: number | null;
   sortField?: "number" | "triage-date" | "created" | "activity";
   sortDirection?: "asc" | "desc";
+  activePreset?: number | null;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -52,12 +53,25 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   lastSyncAt = null,
   sortField = "number",
   sortDirection = "desc",
+  activePreset = null,
 }) => {
   const sortNames = {
     "number": "Issue #",
     "triage-date": "Triaged",
     "created": "Created",
     "activity": "Activity"
+  };
+
+  const presetNames: Record<number, string> = {
+    1: "Inbox",
+    2: "To Close",
+    3: "To Keep",
+    4: "Recently Triaged",
+    5: "Needs Review",
+    6: "Closed on GitHub",
+    7: "Oldest First",
+    8: "Hot Issues",
+    9: "Clear All",
   };
 
   const sortArrow = sortDirection === "desc" ? "↓" : "↑";
@@ -82,6 +96,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           </Box>
           <Box>
             <Text>
+              {activePreset !== null && (
+                <>
+                  <Text color="magenta" bold>[P{activePreset}: {presetNames[activePreset]}]</Text>
+                  <Text dimColor> | </Text>
+                </>
+              )}
               <Text dimColor>Sort: </Text>
               <Text color="cyan">{sortNames[sortField]} {sortArrow}</Text>
             </Text>
@@ -114,7 +134,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   {"Space Toggle | A All | I Invert | V Exit | ESC Clear"}
                 </>
               ) : (
-                "↑/↓ Nav | Enter Open | W Web | D Done | R/U Mark | 1-5 Status | C/K Close | / Search | O Sort | S Sync | V Select | ? Help"
+                "↑/↓ Nav | Enter Open | W Web | R/U Mark | 1-9 Presets | r Status | c GitHub | x Close/Keep | m Model | / Search | O Sort | S Sync | V Select | ? Help"
               )}
             </Text>
           </Box>
