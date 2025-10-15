@@ -480,12 +480,66 @@ export class ReviewManager {
         reviewStatus: "unread",
       };
     }
-    
+
     // Update model if provided
     if (model) {
       this.metadata.issues[issueKey].model = model;
     }
-    
+
     await this.saveMetadata();
+  }
+
+  async syncAllIssuesFromGitHub(githubToken: string, owner: string, repo: string): Promise<{
+    total: number;
+    triaged: number;
+    untriaged: number;
+  }> {
+    await this.loadMetadata();
+
+    const { GitHubClient } = await import("./github");
+    const githubClient = new GitHubClient(githubToken);
+
+    let total = 0;
+    let triaged = 0;
+    let untriaged = 0;
+
+    // Fetch all issues from GitHub
+    for await (const issue of githubClient.listIssuesPaginated(owner, repo, {
+      state: "all",
+    })) {
+      // Skip pull requests (GitHub API returns both issues and PRs)
+      if ('pull_request' in issue) {
+        continue;
+      }
+
+      total++;
+      const issueKey = issue.number.toString();
+      const existingMetadata = this.metadata.issues[issueKey];
+
+      if (existingMetadata) {
+        // Issue has been triaged - update GitHub data
+        triaged++;
+        existingMetadata.title = issue.title;
+        existingMetadata.createdAt = issue.created_at;
+        existingMetadata.updatedAt = issue.updated_at;
+        existingMetadata.closedOnGitHub = issue.state === "closed";
+      } else {
+        // Issue hasn't been triaged - create minimal entry
+        untriaged++;
+        this.metadata.issues[issueKey] = {
+          issueNumber: issue.number,
+          triageDate: "", // Empty string indicates untriaged
+          reviewStatus: "unread",
+          title: issue.title,
+          createdAt: issue.created_at,
+          updatedAt: issue.updated_at,
+          closedOnGitHub: issue.state === "closed",
+        };
+      }
+    }
+
+    await this.saveMetadata();
+
+    return { total, triaged, untriaged };
   }
 }

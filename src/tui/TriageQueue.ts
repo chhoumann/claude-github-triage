@@ -19,6 +19,8 @@ export class TriageQueue extends EventEmitter {
   private projectPath: string;
   private triagePath: string;
   private debugPath: string;
+  private projectRoot: string;
+  private repoSlug: string;
   private githubToken: string;
   private adapterName: AdapterType = "claude";
   private runOptions: TriageRunOptions;
@@ -30,6 +32,8 @@ export class TriageQueue extends EventEmitter {
     projectPath: string;
     triagePath: string;
     debugPath: string;
+    projectRoot: string;
+    repoSlug: string;
     githubToken: string;
     concurrency?: number;
     defaultAdapter?: AdapterType;
@@ -40,6 +44,8 @@ export class TriageQueue extends EventEmitter {
     this.projectPath = config.projectPath;
     this.triagePath = config.triagePath;
     this.debugPath = config.debugPath;
+    this.projectRoot = config.projectRoot;
+    this.repoSlug = config.repoSlug;
     this.githubToken = config.githubToken;
     this.concurrency = config.concurrency || 3;
     this.adapterName = config.defaultAdapter || "claude";
@@ -115,7 +121,9 @@ export class TriageQueue extends EventEmitter {
         adapter,
         this.adapterName,
         this.triagePath,
-        this.debugPath
+        this.debugPath,
+        this.projectRoot,
+        this.repoSlug
       );
 
       await triager.triageIssue(

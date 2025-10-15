@@ -43,6 +43,11 @@ export const TableView: React.FC<TableViewProps> = ({
     if (rowStatus === "error") return "❌ Failed";
     if (rowStatus === "skipped") return "⏭ Skipped";
 
+    // Check if issue is untriaged (empty triageDate)
+    if (!issue.triageDate) {
+      return issue.closedOnGitHub ? "⚠️ Untriaged 🔒" : "⚠️ Untriaged";
+    }
+
     const parts: string[] = [];
     if (issue.reviewStatus === "unread") parts.push("Unread");
     else parts.push("Read");
@@ -51,6 +56,8 @@ export const TableView: React.FC<TableViewProps> = ({
   };
 
   const formatRecommendation = (issue: IssueMetadata): string => {
+    // Show N/A for untriaged issues
+    if (!issue.triageDate) return "-";
     if (issue.shouldClose === true) return "🔴 Close";
     if (issue.shouldClose === false) return "✅ Keep";
     return "❓ Unknown";
@@ -61,7 +68,11 @@ export const TableView: React.FC<TableViewProps> = ({
     return str.length > maxLen ? str.substring(0, maxLen - 1) + "…" : str.padEnd(maxLen);
   };
 
-  const formatModel = (model: string | undefined): string => {
+  const formatModel = (issue: IssueMetadata): string => {
+    // Show "-" for untriaged issues
+    if (!issue.triageDate) return "-".padEnd(15);
+
+    const model = issue.model;
     if (!model) return "".padEnd(15);
 
     // Handle adapter names (claude, codex)
@@ -112,7 +123,7 @@ export const TableView: React.FC<TableViewProps> = ({
               {formatRelativeTime(issue.triageDate).padEnd(10)}
               {formatRelativeTime(issue.createdAt).padEnd(10)}
               {formatRelativeTime(issue.updatedAt).padEnd(10)}
-              {formatModel(issue.model)}
+              {formatModel(issue)}
             </Text>
           </Box>
         );

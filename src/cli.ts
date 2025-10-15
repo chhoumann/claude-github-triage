@@ -10,6 +10,7 @@ import { EditorManager } from "./editor-manager";
 import React from "react";
 import { render } from "ink";
 import { InboxApp } from "./tui/InboxApp";
+import { TriageApp } from "./tui/TriageApp";
 
 const program = new Command();
 
@@ -45,6 +46,15 @@ program
     "--apply",
     "Apply recommendations to GitHub (add labels, close issues)",
   )
+  .option(
+    "--interactive",
+    "Use interactive TUI mode (default: true)",
+    true,
+  )
+  .option(
+    "--no-interactive",
+    "Use non-interactive mode (good for CI/automation)",
+  )
   .action(async (options) => {
     try {
       const { ProjectContext } = await import("./project-context");
@@ -66,7 +76,9 @@ program
         adapter,
         adapterType,
         ctx.paths.triage,
-        ctx.paths.debug
+        ctx.paths.debug,
+        ctx.paths.root,
+        ctx.repoSlug
       );
       const projectPath = path.resolve(ctx.codePath);
 
@@ -102,20 +114,47 @@ program
           `\n📋 Analysis complete. Results saved to: ${resultPath}`,
         );
       } else {
-        await triager.triageMultipleIssues(
-          ctx.owner,
-          ctx.repo,
-          projectPath,
-          {
-            state: options.state as "open" | "closed" | "all",
-            labels: options.labels,
-            limit: options.limit ? parseInt(options.limit) : undefined,
-            sort: options.sort,
-            direction: options.direction,
-            concurrency: parseInt(options.concurrency),
-            force: options.force,
-          },
-        );
+        // Multiple issues - use TUI or non-interactive mode
+        if (options.interactive !== false) {
+          // Interactive TUI mode (default)
+          render(
+            React.createElement(TriageApp, {
+              owner: ctx.owner,
+              repo: ctx.repo,
+              projectPath,
+              triagePath: ctx.paths.triage,
+              debugPath: ctx.paths.debug,
+              projectRoot: ctx.paths.root,
+              repoSlug: ctx.repoSlug,
+              githubToken: ctx.token,
+              options: {
+                state: options.state as "open" | "closed" | "all",
+                labels: options.labels,
+                limit: options.limit ? parseInt(options.limit) : undefined,
+                sort: options.sort as "created" | "updated" | "comments",
+                direction: options.direction as "asc" | "desc",
+                concurrency: parseInt(options.concurrency),
+                force: options.force,
+              },
+            })
+          );
+        } else {
+          // Non-interactive mode (for CI/automation)
+          await triager.triageMultipleIssues(
+            ctx.owner,
+            ctx.repo,
+            projectPath,
+            {
+              state: options.state as "open" | "closed" | "all",
+              labels: options.labels,
+              limit: options.limit ? parseInt(options.limit) : undefined,
+              sort: options.sort,
+              direction: options.direction,
+              concurrency: parseInt(options.concurrency),
+              force: options.force,
+            },
+          );
+        }
       }
     } catch (error) {
       console.error("❌ Error:", error);
@@ -163,8 +202,23 @@ program
   .option("-s, --sort <field>", "Sort by: number, date", "number")
   .option("--close <filter>", "Filter by SHOULD_CLOSE: yes|no|unknown|not-no")
   .option("--table", "Use legacy table mode instead of interactive TUI")
+  .option("--include-all", "Include all GitHub issues, not just triaged ones")
   .action(async (options) => {
     try {
+      const { ProjectContext } = await import("./project-context");
+      const ctx = await ProjectContext.resolve({});
+      await ctx.ensureDirs();
+      await ctx.migrateLegacyIfNeeded();
+
+      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
+
+      // Sync all issues from GitHub if requested
+      if (options.includeAll) {
+        console.log(`🔄 Syncing all issues from ${ctx.owner}/${ctx.repo}...`);
+        const result = await reviewManager.syncAllIssuesFromGitHub(ctx.token, ctx.owner, ctx.repo);
+        console.log(`✨ Synced ${result.total} issues (${result.triaged} triaged, ${result.untriaged} untriaged)\n`);
+      }
+
       if (!options.table) {
         render(
           React.createElement(InboxApp, {
@@ -176,19 +230,13 @@ program
         return;
       }
 
-      const { ProjectContext } = await import("./project-context");
-      const ctx = await ProjectContext.resolve({});
-      await ctx.ensureDirs();
-      await ctx.migrateLegacyIfNeeded();
-      
-      const reviewManager = new ReviewManager(ctx.paths.root, ctx.repoSlug);
       await reviewManager.scanForNewIssues();
       const issues = await reviewManager.getInbox(
         options.filter as "all" | "read" | "unread",
         options.sort as "number" | "date",
         options.close as "yes" | "no" | "unknown" | "not-no" | undefined,
       );
-      
+
       const stats = await reviewManager.getStats();
       
       console.log(`\n📥 Triage Inbox - ${stats.unread} unread, ${stats.read} read (${stats.total} total)\n`);

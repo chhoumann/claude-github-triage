@@ -104,6 +104,8 @@ export const InboxApp: React.FC<InboxAppProps> = ({
           projectPath: ctx.codePath,
           triagePath: ctx.paths.triage,
           debugPath: ctx.paths.debug,
+          projectRoot: ctx.paths.root,
+          repoSlug: ctx.repoSlug,
           githubToken: ctx.token,
           concurrency: 3,
           defaultAdapter: lastAdapter,
@@ -350,6 +352,16 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     if (filteredIssues.length === 0) return;
     const issue = filteredIssues[selectedIndex];
     if (!issue) return;
+
+    // Check if issue has been triaged
+    if (!issue.triageDate) {
+      setToast({
+        message: `Issue #${issue.issueNumber} hasn't been triaged yet. Press 'V' then 'T' to triage it.`,
+        level: "warn",
+        expiresAt: Date.now() + 5000,
+      });
+      return;
+    }
 
     try {
       const { ProjectContext } = await import("../project-context");

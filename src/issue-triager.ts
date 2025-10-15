@@ -47,10 +47,12 @@ export class IssueTriage {
     agentAdapter: AgentAdapter,
     adapterName: string,
     triagePath: string = "results",
-    debugPath: string = "results"
+    debugPath: string = "results",
+    projectRoot: string = "results",
+    repoSlug?: string
   ) {
     this.githubClient = new GitHubClient(githubToken);
-    this.reviewManager = new ReviewManager();
+    this.reviewManager = new ReviewManager(projectRoot, repoSlug);
     this.agentAdapter = agentAdapter;
     this.adapterName = adapterName;
     this.triagePath = triagePath;
