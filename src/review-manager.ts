@@ -248,6 +248,10 @@ export class ReviewManager {
     }
   }
 
+  public getCachedIssue(issueNumber: number): IssueMetadata | undefined {
+    return this.metadata.issues[issueNumber.toString()];
+  }
+
   async markAsUnread(issueNumber: number): Promise<void> {
     await this.scanForNewIssues();
     

@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Box, Text, useInput, useApp } from "ink";
 import { TableView } from "./TableView";
 import { BulkTriageProgress, type BulkTriageStatus } from "./BulkTriageProgress";
 import { TriageQueue, type TriageQueueEvent } from "./TriageQueue";
-import type { IssueMetadata } from "../review-manager";
+import type { IssueMetadata, ReviewManager } from "../review-manager";
 import { Toast, type ToastMessage } from "./Toast";
 
 interface TriageAppProps {
@@ -50,6 +50,7 @@ export const TriageApp: React.FC<TriageAppProps> = ({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const queueRef = useRef<TriageQueue | null>(null);
+  const reviewManagerRef = useRef<ReviewManager | null>(null);
 
   // Auto-clear expired toasts
   useEffect(() => {
@@ -61,6 +62,29 @@ export const TriageApp: React.FC<TriageAppProps> = ({
 
     return () => clearTimeout(timeout);
   }, [toast]);
+
+  const refreshIssueMetadata = useCallback(async (issueNumber: number) => {
+    const reviewManager = reviewManagerRef.current;
+    if (!reviewManager) return;
+
+    try {
+      await reviewManager.scanForNewIssues();
+      const updatedIssue = reviewManager.getCachedIssue(issueNumber);
+      if (!updatedIssue) return;
+
+      setIssues((prev) => {
+        const idx = prev.findIndex((issue) => issue.issueNumber === issueNumber);
+        if (idx === -1) {
+          return prev;
+        }
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...updatedIssue };
+        return next;
+      });
+    } catch (err) {
+      console.error(`Failed to refresh metadata for issue #${issueNumber}`, err);
+    }
+  }, []);
 
   // Initialize and fetch issues
   useEffect(() => {
@@ -74,6 +98,7 @@ export const TriageApp: React.FC<TriageAppProps> = ({
 
         const client = new GitHubClient(githubToken);
         const reviewManager = new ReviewManager(projectRoot, repoSlug);
+        reviewManagerRef.current = reviewManager;
 
         // Fetch issues from GitHub based on filters
         const issuesToTriage: IssueMetadata[] = [];
@@ -162,6 +187,7 @@ export const TriageApp: React.FC<TriageAppProps> = ({
                 activeIssues,
               };
             });
+            refreshIssueMetadata(event.issueNumber);
           } else if (event.type === "error") {
             setPerRowStatus((prev) => new Map(prev).set(event.issueNumber, "error"));
             setBulkTriageStatus((prev) => {
@@ -202,8 +228,9 @@ export const TriageApp: React.FC<TriageAppProps> = ({
     return () => {
       queueRef.current?.stop();
       queueRef.current = null;
+      reviewManagerRef.current = null;
     };
-  }, []);
+  }, [refreshIssueMetadata]);
 
   // Auto-exit when complete (after showing completion message)
   useEffect(() => {
@@ -264,7 +291,9 @@ export const TriageApp: React.FC<TriageAppProps> = ({
     return (
       <Box flexDirection="column" padding={1}>
         <Text color="red">❌ Error: {loadError}</Text>
-        <Text dimColor marginTop={1}>Press Q or ESC to exit</Text>
+        <Box marginTop={1}>
+          <Text dimColor>Press Q or ESC to exit</Text>
+        </Box>
       </Box>
     );
   }
@@ -285,7 +314,9 @@ export const TriageApp: React.FC<TriageAppProps> = ({
             </Text>
           </Box>
         )}
-        <Text dimColor marginTop={1}>Exiting...</Text>
+        <Box marginTop={1}>
+          <Text dimColor>Exiting...</Text>
+        </Box>
       </Box>
     );
   }
@@ -294,7 +325,9 @@ export const TriageApp: React.FC<TriageAppProps> = ({
     return (
       <Box flexDirection="column" padding={1}>
         <Text color="yellow">⚠️  Triage Cancelled</Text>
-        <Text dimColor marginTop={1}>Exiting...</Text>
+        <Box marginTop={1}>
+          <Text dimColor>Exiting...</Text>
+        </Box>
       </Box>
     );
   }

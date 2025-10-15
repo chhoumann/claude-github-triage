@@ -319,11 +319,29 @@ export const InboxApp: React.FC<InboxAppProps> = ({
     const issue = filteredIssues[selectedIndex];
     if (!issue) return;
 
-    const { ConfigManager } = await import("../config-manager");
-    const configManager = new ConfigManager();
-    const repo = configManager.getGitHubRepo();
+    let repoSlug: string | undefined = currentProject || undefined;
 
-    if (!repo) {
+    try {
+      const { ConfigManager } = await import("../config-manager");
+      const configManager = new ConfigManager();
+      if (!repoSlug) {
+        repoSlug = configManager.getGitHubRepo() || configManager.getActiveProject();
+      }
+    } catch (err) {
+      console.error("Failed to load config manager:", err);
+    }
+
+    if (!repoSlug) {
+      try {
+        const { ProjectContext } = await import("../project-context");
+        const ctx = await ProjectContext.resolve({});
+        repoSlug = ctx.repoSlug;
+      } catch (err) {
+        console.error("Failed to resolve project context for browser open:", err);
+      }
+    }
+
+    if (!repoSlug) {
       setToast({
         message: "No GitHub repo configured. Run: bun run src/cli.ts config set-repo owner/repo",
         level: "error",
@@ -337,7 +355,7 @@ export const InboxApp: React.FC<InboxAppProps> = ({
         "gh", "issue", "view",
         issue.issueNumber.toString(),
         "--web",
-        "-R", repo
+        "-R", repoSlug
       ]);
     } catch (err) {
       setToast({

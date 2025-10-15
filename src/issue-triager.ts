@@ -124,7 +124,14 @@ export class IssueTriage {
       lastMessage.type === "result" &&
       lastMessage.subtype === "success"
     ) {
-      await Bun.write(resultPath, lastMessage.result);
+      const triageOutput = lastMessage.result;
+      if (typeof triageOutput !== "string") {
+        throw new Error(
+          `Claude returned a success result for issue #${issueNumber} without a payload`,
+        );
+      }
+
+      await Bun.write(resultPath, triageOutput);
       // Update review metadata
       await this.reviewManager.updateTriageMetadata(issueNumber, this.adapterName);
     } else {
@@ -409,7 +416,6 @@ SUGGESTED_RESPONSE:
       {
         concurrent: concurrencyLimit,
         exitOnError: false,
-        rendererOptions: { showSubtasks: false },
       },
     );
 
